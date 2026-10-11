@@ -10,6 +10,31 @@ DROP_HEADERS = {
 STATIC_EXT = (".js", ".css", ".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp", ".ico",
               ".woff", ".woff2", ".ttf", ".eot", ".mp4", ".mp3", ".map")
 
+# Analytics / ads / error-reporting services: never site data, always skipped
+TRACKER_HOSTS = (
+    "google-analytics.com", "googletagmanager.com", "doubleclick.net", "googlesyndication.com",
+    "google.com", "gstatic.com", "googleapis.com", "clarity.ms", "hotjar.com", "hotjar.io",
+    "facebook.com", "facebook.net", "sentry.io", "yektanet.com", "mediaad.org", "metrix.ir",
+    "zeblines.com", "zebline.com", "flowchat.tech", "backtory.com", "najva.com", "pushe.co",
+    "goftino.com", "raychat.io", "crisp.chat", "tawk.to", "newrelic.com", "nr-data.net",
+    "mixpanel.com", "segment.io", "segment.com", "amplitude.com", "webengage.com", "smartlook.com",
+    "yandex.ru", "mc.yandex.ru", "bing.com", "linkedin.com", "twitter.com", "tiktok.com",
+)
+TRACKER_HOST_PREFIXES = ("sentry.", "analytics.", "stats.", "tracker.", "track.", "log.", "logs.", "metrics.", "telemetry.")
+# Whole path segments only, so e.g. /api/track-order is not caught
+TRACKER_PATH_SEGMENTS = {"envelope", "collect", "track", "analytics", "beacon", "pixel", "telemetry",
+                         "sentry", "gtag", "gtm.js", "rum"}
+
+
+def is_tracker(url: str) -> bool:
+    u = urlparse(url)
+    host, path = (u.hostname or "").lower(), u.path.lower()
+    if any(host == t or host.endswith("." + t) for t in TRACKER_HOSTS):
+        return True
+    if host.startswith(TRACKER_HOST_PREFIXES):
+        return True
+    return any(seg in TRACKER_PATH_SEGMENTS for seg in path.split("/"))
+
 
 class HarError(ValueError):
     pass
@@ -35,19 +60,23 @@ def host_allowed(url: str, allowed: list[str]) -> bool:
 
 
 def _is_api(entry: dict) -> bool:
-    rtype = (entry.get("_resourceType") or "").lower()
-    if rtype in ("xhr", "fetch"):
-        return True
-    mime = (entry.get("response", {}).get("content", {}).get("mimeType") or "").lower()
+    """A request that returned data (JSON), not a fire-and-forget beacon."""
+    resp = entry.get("response", {})
+    if resp.get("status") in (0, 204) or (resp.get("status") or 0) >= 400:
+        return False
+    content = resp.get("content", {})
+    mime = (content.get("mimeType") or "").lower()
     if "json" in mime or "graphql" in mime:
         return True
-    return False
+    rtype = (entry.get("_resourceType") or "").lower()
+    text = (content.get("text") or "").lstrip()
+    return rtype in ("xhr", "fetch") and text[:1] in ("{", "[")
 
 
 def extract(data: dict, allowed_domains: list[str], api_only: bool = True) -> tuple[list[dict], dict]:
     """Return (templates, stats). Only hosts in allowed_domains are kept."""
     out, seen = [], set()
-    stats = {"total": 0, "kept": 0, "outside_domain": 0, "static_or_non_api": 0, "duplicates": 0}
+    stats = {"total": 0, "kept": 0, "outside_domain": 0, "static_or_non_api": 0, "duplicates": 0, "trackers": 0}
     outside_hosts: dict[str, int] = {}
     has_auth = False
     for e in data["log"]["entries"]:
@@ -57,6 +86,9 @@ def extract(data: dict, allowed_domains: list[str], api_only: bool = True) -> tu
         method = req.get("method", "GET").upper()
         if not url.startswith(("http://", "https://")):
             stats["static_or_non_api"] += 1
+            continue
+        if is_tracker(url):
+            stats["trackers"] += 1
             continue
         if not host_allowed(url, allowed_domains):
             stats["outside_domain"] += 1
@@ -97,7 +129,7 @@ def extract(data: dict, allowed_domains: list[str], api_only: bool = True) -> tu
 
         status = e.get("response", {}).get("status")
         out.append({
-            "label": f"{method} {urlparse(url).path or '/'}",
+            "label": urlparse(url).path or "/",
             "method": method,
             "url": url,
             "headers": headers,

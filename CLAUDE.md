@@ -49,6 +49,8 @@ deploy/wheels/     offline wheels (py3.10–3.13, x86_64) for servers without Py
 - Upload stats list skipped `outside_hosts`; Firefox `postData.params` bodies are rebuilt; non-ASCII header values are percent-encoded.
 - Runs never stay stuck in `running` (generic except + reset on startup); DB auto-migrates the new column.
 - Panel shows meaningful errors for 413/502/504/non-JSON (CDN) responses.
+- Owner asked for a **simple** panel: no tabs; new site = HAR file + name + contract number (domain auto = base domain of the HAR's page; advanced settings folded in <details>); site view = requests list + "گرفتن داده" + results. Keep it simple.
+- HAR import drops trackers/analytics/ads (`har.is_tracker`: host list, `sentry.`-style prefixes, path segments like collect/envelope) and only keeps requests that returned JSON (not 204/4xx beacons).
 
 ## Likely production issues to check first
 1. **Arvan CDN caching** API responses → site list doesn't update after save. Fixed in code with `Cache-Control: no-store` middleware (needs deploy + purge CDN cache). Also consider a CDN rule to bypass cache for the whole host.
