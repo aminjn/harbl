@@ -60,6 +60,11 @@ details{margin:10px 0}summary{cursor:pointer;color:var(--mute);font-size:13px}
 .tbl td{max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .result{display:flex;gap:16px;align-items:center;justify-content:space-between;flex-wrap:wrap;background:var(--bg);border-radius:10px;padding:14px;margin-top:10px}
 .result .num{font-size:28px;font-weight:700}
+#rec.hidden{display:none}
+#rec{position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:50;display:flex;align-items:center;justify-content:center;padding:12px}
+#rec .box{background:var(--card);border-radius:12px;padding:12px;width:min(1320px,100%);max-height:100%;overflow:auto}
+#rec-img{width:100%;aspect-ratio:1280/800;background:#000;border-radius:6px;cursor:pointer;outline:none;display:block;object-fit:contain}
+#rec-img:focus{box-shadow:0 0 0 3px var(--pri)}
 .empty{text-align:center;padding:24px;border:2px dashed var(--line);border-radius:10px;color:var(--mute)}
 </style>
 </head>
@@ -122,6 +127,17 @@ details{margin:10px 0}summary{cursor:pointer;color:var(--mute);font-size:13px}
   </section>
 </main>
 <input type="file" id="har-input" accept=".har,application/json" class="hidden" onchange="if(this.files[0])sendHar(this.files[0]).finally(()=>this.value='')">
+<div id="rec" class="hidden"><div class="box">
+  <div class="row" style="margin-bottom:8px">
+    <button onclick="recIn({type:'back'})" title="عقب">→</button><button onclick="recIn({type:'reload'})" title="بارگذاری دوباره">⟳</button>
+    <input id="rec-url" dir="ltr" style="flex:1;min-width:200px" onkeydown="if(event.key==='Enter')recIn({type:'goto',url:this.value})">
+    <button class="pri" onclick="recStop(true)">✓ پایان و ذخیره</button><button class="bad" onclick="recStop(false)">لغو</button>
+  </div>
+  <p class="note" style="margin:0 0 8px">روی تصویر کلیک کنید و تایپ کنید (اول روی کادر متن در سایت کلیک کنید). <b>۱.</b> لاگین کنید <b>۲.</b> صفحه‌های این بخش را باز کنید و صفحه بعد را بزنید <b>۳.</b> روی یک مورد کلیک کنید و اطلاعات کامل/شماره را باز کنید <b>۴.</b> «پایان و ذخیره». <span id="rec-st"></span></p>
+  <img id="rec-img" tabindex="0" alt="">
+  <div class="row" style="margin-top:8px"><input id="rec-text" placeholder="متن طولانی یا فارسی را اینجا بنویسید و «ارسال» بزنید (مثلاً شماره موبایل یا کد)" style="flex:1" onkeydown="if(event.key==='Enter'){recSendText();event.preventDefault()}">
+    <button onclick="recSendText()">ارسال متن</button><button onclick="recIn({type:'key',key:'Enter'})">Enter ↵</button></div>
+</div></div>
 <div id="toast"></div>
 <script>
 let sites=[], cur=null, cats=[], cat=null, poll=null, q='', page=0, src='';
@@ -195,6 +211,7 @@ function renderCat(){
       <h3 style="margin:0">${esc(cat.name)}</h3>
       <div class="row">
         <button class="pri big" id="btn-run" onclick="runCat()" ${cat.request_count?'':'disabled'}>▶ گرفتن داده این بخش</button>
+        <button onclick="recStart()">🎥 ضبط با مرورگر</button>
         <button onclick="$('#har-input').click()">↻ آپلود HAR</button>
       </div>
     </div>
@@ -203,9 +220,9 @@ function renderCat(){
       <div class="row"><a href="/api/categories/${cat.id}/export?fmt=json"><button class="pri big" ${cat.item_count?'':'disabled'}>⬇ دانلود JSON</button></a>
         <a href="/api/categories/${cat.id}/export?fmt=csv"><button ${cat.item_count?'':'disabled'}>⬇ Excel</button></a></div></div>
     <p class="note" id="lastrun" style="margin-top:10px">${lastRunText(lr)}</p>
-    ${cat.request_count?'':`<div class="empty" style="margin-top:10px"><b>HAR این بخش را آپلود کنید</b><br>
-      در سایت فقط صفحه‌های «${esc(cat.name)}» را باز کنید (مثلاً لیست و صفحه ۲ آن)، HAR بگیرید و اینجا بدهید.<br><br>
-      <button class="pri" onclick="$('#har-input').click()">انتخاب فایل HAR</button></div>`}
+    ${cat.request_count?'':`<div class="empty" style="margin-top:10px"><b>به این بخش یاد بدهید چه داده‌ای بگیرد</b><br>
+      «ضبط با مرورگر» را بزنید: سایت داخل همین صفحه باز می‌شود. لاگین کنید، صفحه‌های «${esc(cat.name)}» را باز کنید و روی یک مورد کلیک کنید (مثلاً پروفایل و نمایش شماره)، بعد «پایان و ذخیره».<br><br>
+      <button class="pri big" onclick="recStart()">🎥 ضبط با مرورگر</button> &nbsp; <button onclick="$('#har-input').click()">یا آپلود فایل HAR</button></div>`}
     <div class="sec" id="data"></div>
     <details class="sec" id="reqs-box"><summary>درخواست‌ها و فیلترها (${fa(cat.request_count)})</summary>
       <p class="note">«لیست» همه صفحه‌هایش گرفته می‌شود. «جزئیات» (مثل پروفایل یا شماره تماس) برای <b>تک‌تک</b> رکوردها تکرار و به همان ردیف اضافه می‌شود.
@@ -234,13 +251,14 @@ async function saveCat(){await jpost(`/api/categories/${cat.id}`,{name:$('#c-nam
 async function delCat(){if(!confirm(`بخش «${cat.name}» و داده‌هایش حذف شود؟`))return;await api(`/api/categories/${cat.id}`,{method:'DELETE'});cat=null;loadCats();loadSites()}
 async function clearItems(){if(!confirm('همه رکوردهای ذخیره‌شده این بخش پاک شود؟'))return;await api(`/api/categories/${cat.id}/items`,{method:'DELETE'});loadCats()}
 
+function showHarStats(s){
+  let h=s.kept?`<p class="note" style="border-color:var(--ok)">${fa(s.kept-(s.details||0))} درخواست لیست${s.details?` و ${fa(s.details)} درخواست جزئیات (برای هر رکورد تکرار می‌شود)`:''} پیدا شد. حالا «▶ گرفتن داده این بخش» را بزنید.</p>`
+    :'<p class="note warn">درخواستی که داده (JSON) برگرداند پیدا نشد. مطمئن شوید صفحه‌های لیست این بخش را باز کرده‌اید.</p>';
+  if(s.no_auth)h+='<p class="note warn">کوکی ورود در درخواست‌ها نیست؛ اگر داده‌ها (مثل شماره) نیاز به لاگین دارند، در ضبط اول لاگین کنید.</p>';
+  $('#har-stats').innerHTML=h}
 async function sendHar(file){if(!cat)return;const fd=new FormData();fd.append('file',file);fd.append('replace',true);
   $('#har-stats').innerHTML='<p class="note">در حال آپلود و بررسی HAR…</p>';
-  try{const s=(await api(`/api/categories/${cat.id}/har`,{method:'POST',body:fd})).stats;
-    let h=s.kept?`<p class="note" style="border-color:var(--ok)">${fa(s.kept-(s.details||0))} درخواست لیست${s.details?` و ${fa(s.details)} درخواست جزئیات (برای هر رکورد تکرار می‌شود)`:''} پیدا شد. حالا «▶ گرفتن داده این بخش» را بزنید.</p>`
-      :'<p class="note warn">در این فایل درخواستی که داده (JSON) برگرداند پیدا نشد. مطمئن شوید صفحه‌ها را بعد از باز کردن تب Network باز کرده‌اید.</p>';
-    if(s.no_auth)h+='<p class="note warn">کوکی ورود در فایل نیست؛ اگر داده‌ها نیاز به لاگین دارند، در DevTools ← ⚙️ Settings ← Preferences ← Network گزینه <span dir="ltr">«Allow to generate HAR with sensitive data»</span> را روشن کنید و دوباره HAR بگیرید.</p>';
-    await loadCats();$('#har-stats').innerHTML=h;loadSites()}
+  try{const s=(await api(`/api/categories/${cat.id}/har`,{method:'POST',body:fd})).stats;await loadCats();showHarStats(s);loadSites()}
   catch(err){$('#har-stats').innerHTML=`<p class="note warn">آپلود ناموفق: ${esc(err.message)}</p>`}}
 
 async function loadReqs(){const rs=await api(`/api/categories/${cat.id}/requests`);
@@ -283,6 +301,40 @@ function watchRun(){$('#btn-run')?.setAttribute('disabled','');$('#btn-run-all')
       toast('تمام شد'+(cat?.last_run?': '+stName[cat.last_run.status]:''))}},2000)}
 async function runCat(){try{await api(`/api/categories/${cat.id}/run`,{method:'POST'});toast('اجرا شروع شد');watchRun()}catch(err){toast(err.message)}}
 async function runAll(){try{await api(`/api/sites/${cur.id}/run`,{method:'POST'});toast('اجرای همه بخش‌ها شروع شد');watchRun()}catch(err){toast(err.message)}}
+
+// ----- recording browser -----
+let recTimer=null,recBusy=false;
+async function recStart(){const url=prompt('آدرس صفحه شروع (معمولاً صفحه لاگین یا صفحه اول سایت):',`https://${cur.allowed_domains[0]}/`);if(url===null)return;
+  toast('در حال باز کردن مرورگر…');
+  try{const r=await jpost(`/api/categories/${cat.id}/recorder/start`,{url});if(r.warning)toast('صفحه کامل باز نشد؛ ادامه دهید');recOpen(r.url)}catch(err){toast(err.message)}}
+function recOpen(url){$('#rec').classList.remove('hidden');$('#rec-url').value=url||'';$('#rec-img').focus();clearInterval(recTimer);recShot();recTimer=setInterval(recShot,700)}
+async function recShot(){if(recBusy)return;recBusy=true;
+  try{const r=await fetch('/api/recorder/screen',{cache:'no-store'});
+    if(r.status===409){recClose();toast('ضبط بسته شد (مدت زیادی بدون استفاده بود)');return}
+    const pu=r.headers.get('X-Page-Url');if(pu&&document.activeElement!==$('#rec-url'))$('#rec-url').value=dec(pu);
+    if(r.ok){const u=URL.createObjectURL(await r.blob()),img=$('#rec-img'),old=img.src;img.src=u;if(old.startsWith('blob:'))URL.revokeObjectURL(old)}}
+  catch{}finally{recBusy=false}}
+async function recIn(ev){$('#rec-st').textContent='…';
+  try{const r=await jpost('/api/recorder/input',ev);if(r.url)$('#rec-url').value=r.url;$('#rec-st').textContent=''}catch(err){$('#rec-st').textContent=err.message}
+  setTimeout(recShot,250);setTimeout(recShot,1200)}
+function recSendText(){const t=$('#rec-text');if(!t.value)return;recIn({type:'text',text:t.value});t.value=''}
+function recClose(){clearInterval(recTimer);$('#rec').classList.add('hidden')}
+async function recStop(save){if(!save&&!confirm('ضبط لغو شود؟ چیزی ذخیره نمی‌شود.'))return;
+  recClose();toast(save?'در حال ساختن فایل و بررسی درخواست‌ها…':'لغو شد');
+  try{const r=await jpost('/api/recorder/stop',{save});
+    if(r.saved){if(cur){await loadCats(r.category_id);showHarStats(r.stats)}else toast('ذخیره شد')}}
+  catch(err){toast(err.message)}}
+(()=>{const img=$('#rec-img');
+  img.addEventListener('click',e=>{const b=img.getBoundingClientRect();img.focus();
+    recIn({type:'click',x:(e.clientX-b.left)*1280/b.width,y:(e.clientY-b.top)*800/b.height})});
+  img.addEventListener('wheel',e=>{e.preventDefault();const b=img.getBoundingClientRect();
+    recIn({type:'scroll',dy:e.deltaY,x:(e.clientX-b.left)*1280/b.width,y:(e.clientY-b.top)*800/b.height})},{passive:false});
+  img.addEventListener('keydown',e=>{if(e.ctrlKey||e.metaKey||e.altKey)return;
+    if(e.key.length===1){recIn({type:'text',text:e.key});e.preventDefault()}
+    else if(['Enter','Backspace','Tab','Escape','Delete','ArrowUp','ArrowDown','ArrowLeft','ArrowRight','Home','End','PageUp','PageDown'].includes(e.key)){recIn({type:'key',key:e.key});e.preventDefault()}});
+})();
+// a recording left open (page reload): offer to continue it
+api('/api/recorder').then(r=>{if(r.active&&confirm('یک ضبط باز است. ادامه می‌دهید؟'))recOpen(r.url)}).catch(()=>{});
 
 const refresh=()=>loadSites().catch(e=>{$('#sites').innerHTML=`<p class="note warn">خطا در دریافت لیست سایت‌ها: ${esc(e.message)}</p>`});
 refresh();setInterval(refresh,15000);

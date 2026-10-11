@@ -15,6 +15,7 @@ from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from pydantic import BaseModel, Field
 
 from . import db, har, scraper
+from .recorder import RecorderError, recorder
 from .config import ADMIN_PASS, ADMIN_USER, DATA_DIR, FEED_KEY, OUTPUT_DIR
 
 STATIC = Path(__file__).parent / "static"
@@ -56,6 +57,7 @@ async def lifespan(app):
         for r in c.execute("SELECT * FROM sites"):
             sync_schedule(db.row(r))
     yield
+    await recorder.stop(save=False)
     scheduler.shutdown(wait=False)
 
 
@@ -229,9 +231,7 @@ def delete_category(cid: int):
     return {"ok": True}
 
 
-@app.post("/api/categories/{cid}/har", dependencies=[Depends(auth)])
-async def upload_har(cid: int, file: UploadFile = File(...), replace: bool = Form(True)):
-    raw = await file.read()
+def _import_har(cid: int, raw: bytes, replace: bool = True) -> dict:
     try:
         data = har.load(raw)
     except har.HarError as e:
@@ -253,7 +253,70 @@ async def upload_har(cid: int, file: UploadFile = File(...), replace: bool = For
         for rid, t in zip(ids, templates):
             of = ids[t["detail_of_index"]] if t["detail_of_index"] is not None else None
             c.execute("UPDATE requests SET family=?, detail_of=? WHERE id=?", (rid, of, rid))
-    return {"stats": stats}
+    return stats
+
+
+@app.post("/api/categories/{cid}/har", dependencies=[Depends(auth)])
+async def upload_har(cid: int, file: UploadFile = File(...), replace: bool = Form(True)):
+    return {"stats": _import_har(cid, await file.read(), replace)}
+
+
+# ---------- Recording browser (log in and click on the site from the panel) ----------
+class RecStart(BaseModel):
+    url: str = ""
+
+
+class RecStop(BaseModel):
+    save: bool = True
+
+
+@app.get("/api/recorder", dependencies=[Depends(auth)])
+def recorder_status():
+    return recorder.status()
+
+
+@app.post("/api/categories/{cid}/recorder/start", dependencies=[Depends(auth)])
+async def recorder_start(cid: int, body: RecStart):
+    with db.conn() as c:
+        cat = _get_cat(c, cid)
+        site = _get_site(c, cat["site_id"])
+    try:
+        await recorder.start(cid, body.url.strip() or f"https://{site['allowed_domains'][0]}/")
+    except RecorderError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:  # page load timeout etc.: the browser is open anyway
+        return {**recorder.status(), "warning": str(e)}
+    return recorder.status()
+
+
+@app.get("/api/recorder/screen", dependencies=[Depends(auth)])
+async def recorder_screen():
+    try:
+        shot = await recorder.screenshot()
+        return Response(shot, media_type="image/jpeg", headers={"X-Page-Url": quote(recorder.page.url, safe=":/?&=%#")})
+    except RecorderError as e:
+        raise HTTPException(409, str(e))
+
+
+@app.post("/api/recorder/input", dependencies=[Depends(auth)])
+async def recorder_input(ev: dict):
+    try:
+        await recorder.input(ev)
+    except RecorderError as e:
+        raise HTTPException(409, str(e))
+    except Exception as e:  # navigation timeouts etc. are not fatal
+        return {"ok": False, "warning": str(e)}
+    return {"ok": True, "url": recorder.page.url if recorder.page else None}
+
+
+@app.post("/api/recorder/stop", dependencies=[Depends(auth)])
+async def recorder_stop(body: RecStop):
+    cid, raw = await recorder.stop(save=body.save)
+    if not body.save or cid is None:
+        return {"saved": False}
+    if not raw:
+        raise HTTPException(500, "فایل ضبط ساخته نشد")
+    return {"saved": True, "category_id": cid, "stats": _import_har(cid, raw, replace=True)}
 
 
 @app.get("/api/categories/{cid}/requests", dependencies=[Depends(auth)])
