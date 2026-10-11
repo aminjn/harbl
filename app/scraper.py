@@ -1,5 +1,6 @@
 """Replay HAR-derived requests and save responses as JSON."""
 import json
+import re
 import time
 from datetime import date, datetime
 from urllib.parse import parse_qsl, quote, urlencode, urlsplit, urlunsplit
@@ -45,23 +46,38 @@ def _safe_headers(headers: dict) -> dict:
             for k, v in headers.items()}
 
 
-PAGE_PARAMS = ("page", "p", "pageNumber", "pageIndex", "page_number", "pageNo")
+PAGE_PARAMS = ("page", "p", "pageNumber", "pageIndex", "page_number", "pageNo", "pagenum")
+NEXT_DATA = re.compile(r"/_next/data/([^/]+)/")
 
 
-def _page_urls(url: str, max_pages: int) -> list[str]:
-    """Same URL for pages start..start+max_pages-1 when it has a page parameter."""
-    u = urlsplit(url)
-    q = parse_qsl(u.query, keep_blank_values=True)
-    for i, (k, v) in enumerate(q):
+def _page_param(url: str):
+    """(name, number) of the page query parameter, or None."""
+    for k, v in parse_qsl(urlsplit(url).query, keep_blank_values=True):
         if k in PAGE_PARAMS and v.isdigit():
-            start = int(v)
-            out = []
-            for n in range(start, start + max(max_pages, 1)):
-                q2 = list(q)
-                q2[i] = (k, str(n))
-                out.append(urlunsplit(u._replace(query=urlencode(q2))))
-            return out
-    return [url]
+            return k, int(v)
+    return None
+
+
+def _with_page(url: str, name: str, n: int) -> str:
+    u = urlsplit(url)
+    q = [(k, v) for k, v in parse_qsl(u.query, keep_blank_values=True) if k != name] + [(name, str(n))]
+    return urlunsplit(u._replace(query=urlencode(q)))
+
+
+def _canonical(url: str) -> str:
+    u = urlsplit(url)
+    return urlunsplit(u._replace(query=urlencode(sorted(parse_qsl(u.query, keep_blank_values=True)))))
+
+
+def _fresh_build_id(client: httpx.Client, url: str, headers: dict) -> str | None:
+    """Next.js sites change /_next/data/<buildId>/ on every deploy; read the current one from the home page."""
+    u = urlsplit(url)
+    try:
+        html = client.get(f"{u.scheme}://{u.netloc}/", headers=headers).text
+    except Exception:
+        return None
+    m = re.search(r'"buildId"\s*:\s*"([^"]+)"', html)
+    return m.group(1) if m else None
 
 
 def _headers_for(site: dict, r: dict) -> dict:
@@ -80,16 +96,16 @@ def _headers_for(site: dict, r: dict) -> dict:
 
 def _save_records(category_id: int, records: list[dict], url: str) -> int:
     """Upsert records; returns how many were new."""
-    new, ts = 0, db.now()
+    new, ts, source = 0, db.now(), extract.source_of(url)
     with db.conn() as c:
         for rec in records:
             flat = extract.flatten(rec)
             key = extract.record_key(rec)
-            cur = c.execute("UPDATE items SET data=?, source_url=?, last_seen=? WHERE category_id=? AND item_key=?",
-                            (json.dumps(flat, ensure_ascii=False), url, ts, category_id, key))
+            cur = c.execute("UPDATE items SET data=?, source_url=?, source=?, last_seen=? WHERE category_id=? AND item_key=?",
+                            (json.dumps(flat, ensure_ascii=False), url, source, ts, category_id, key))
             if cur.rowcount == 0:
-                c.execute("INSERT INTO items(category_id, item_key, data, source_url, first_seen, last_seen) VALUES (?,?,?,?,?,?)",
-                          (category_id, key, json.dumps(flat, ensure_ascii=False), url, ts, ts))
+                c.execute("INSERT INTO items(category_id, item_key, data, source_url, source, first_seen, last_seen) VALUES (?,?,?,?,?,?,?)",
+                          (category_id, key, json.dumps(flat, ensure_ascii=False), url, source, ts, ts))
                 new += 1
     return new
 
@@ -103,19 +119,37 @@ def run_category(category_id: int, trigger: str = "manual") -> dict:
         reqs = [db.row(r) for r in c.execute(
             "SELECT * FROM requests WHERE category_id=? AND selected=1 ORDER BY id", (category_id,))]
         run_id = c.execute(
-            "INSERT INTO runs(site_id, category_id, started_at, status, trigger) VALUES (?,?,?,?,?)",
-            (site["id"], category_id, db.now(), "running", trigger)).lastrowid
+            "INSERT INTO runs(site_id, category_id, started_at, status, trigger, message) VALUES (?,?,?,?,?,?)",
+            (site["id"], category_id, db.now(), "running", trigger, "شروع…")).lastrowid
 
     results, ok, fail, message, records_total, records_new = [], 0, 0, None, 0, 0
+    build_ids: dict[str, str] = {}  # old Next.js build id -> current one
+    fetched: set[tuple] = set()      # pages already fetched in this run (HAR often holds page 1 and 2)
+    sent = 0
+
+    def progress():
+        with db.conn() as c:
+            c.execute("UPDATE runs SET ok_count=?, fail_count=?, message=? WHERE id=?",
+                      (ok, fail, f"{sent} صفحه گرفته شد · {records_total} رکورد ({records_new} جدید)", run_id))
+
     try:
         check_contract(site)
         if not reqs:
             raise ScrapeBlocked("هیچ درخواستی در این بخش نیست؛ HAR این بخش را آپلود کنید")
-        sent = 0
         with httpx.Client(timeout=REQUEST_TIMEOUT, follow_redirects=False) as client:
             for r in reqs:
-                prev_keys = None
-                for url in _page_urls(r["url"], cat["max_pages"]):
+                headers = _headers_for(site, r)
+                page = _page_param(r["url"])
+                pname, pnum = page or ("page", 1)
+                url, prev_keys, pages, rec_path = r["url"], None, 0, None
+                while True:
+                    m = NEXT_DATA.search(url)
+                    if m and m.group(1) in build_ids:
+                        url = url.replace(m.group(0), f"/_next/data/{build_ids[m.group(1)]}/")
+                    page_key = (r["method"], _canonical(url), r["body"])
+                    if page_key in fetched:
+                        break
+                    fetched.add(page_key)
                     if sent:
                         time.sleep(max(site["delay_seconds"], 0))
                     item = {"request_id": r["id"], "label": r["label"], "method": r["method"], "url": url}
@@ -128,32 +162,53 @@ def run_category(category_id: int, trigger: str = "manual") -> dict:
                     sent += 1
                     t0 = time.monotonic()
                     try:
-                        resp = client.request(r["method"], url, headers=_headers_for(site, r),
-                                              content=r["body"].encode() if r["body"] else None)
+                        body = r["body"].encode() if r["body"] else None
+                        resp = client.request(r["method"], url, headers=headers, content=body)
+                        m = NEXT_DATA.search(url)
+                        if resp.status_code == 404 and m:
+                            new_id = _fresh_build_id(client, url, headers)
+                            if new_id and new_id != m.group(1):
+                                build_ids[m.group(1)] = new_id
+                                url = url.replace(m.group(0), f"/_next/data/{new_id}/")
+                                item["url"] = url
+                                resp = client.request(r["method"], url, headers=headers, content=body)
                         if len(resp.content) > MAX_RESPONSE_BYTES:
                             raise ValueError("پاسخ بزرگ‌تر از حد مجاز است")
                         data = _parse_body(resp)
-                        item.update(status=resp.status_code, elapsed_ms=round((time.monotonic() - t0) * 1000), data=data)
+                        item.update(status=resp.status_code, elapsed_ms=round((time.monotonic() - t0) * 1000))
                     except Exception as e:  # network / timeout / size
                         item.update(error=str(e))
                         fail += 1
                         break
                     if resp.status_code in (401, 403):
                         item["warning"] = "احتمالاً نشست (کوکی/توکن) منقضی شده؛ HAR جدید آپلود کنید"
-                    if not 200 <= resp.status_code < 400:
-                        fail += 1
+                    if not 200 <= resp.status_code < 300:
+                        item["error_body"] = str(data)[:300]
+                        # A probed extra page that the site rejects just means there are no more pages
+                        if pages == 0:
+                            fail += 1
+                        else:
+                            results.pop()
                         break
                     ok += 1
-                    records = extract.find_records(data) if isinstance(data, (dict, list)) else []
+                    records, rec_path = extract.find_records(data, rec_path) if isinstance(data, (dict, list)) else ([], rec_path)
                     keys = [extract.record_key(x) for x in records]
                     item["records"] = len(records)
                     if not records or keys == prev_keys:  # past the last page
                         break
                     prev_keys = keys
+                    pages += 1
                     records_total += len(records)
                     records_new += _save_records(category_id, records, url)
+                    progress()
+                    # Next page: follow the page parameter, or try adding one (GET only)
+                    if pages >= cat["max_pages"] or (not page and r["method"] != "GET"):
+                        break
+                    url = _with_page(url, pname, pnum + pages)
+        with db.conn() as c:
+            total = c.execute("SELECT COUNT(*) FROM items WHERE category_id=?", (category_id,)).fetchone()[0]
         status = "ok" if fail == 0 else ("partial" if ok else "failed")
-        message = f"{records_total} رکورد ({records_new} جدید)"
+        message = f"{records_total} رکورد از {sent} صفحه ({records_new} جدید) · مجموع این بخش: {total}"
     except ScrapeBlocked as e:
         status, message = "failed", str(e)
     except Exception as e:  # never leave a run stuck in "running"

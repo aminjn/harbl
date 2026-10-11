@@ -57,6 +57,10 @@ deploy/wheels/     offline wheels (py3.10–3.13, x86_64) for servers without Py
 - After each response, `extract.find_records` takes the largest list of objects in the JSON as the records; each is flattened (`a.b` keys) and upserted into `items` by id/slug/code (else content hash). Export: `/api/categories/{id}/export?fmt=csv|json` (CSV has a BOM for Excel).
 - `categories.max_pages`: if a request URL has `page=`-style param, pages are fetched until an empty or repeated page.
 - Old databases: requests without a section are moved into a section named «عمومی» on startup.
+- Paging is automatic: a request with a `page=`-style param is followed until an empty/repeated page (cap `max_pages`, default 200); a GET without one gets `page=2,3…` probed. The record list's JSON path from page 1 is reused on later pages. Pages already fetched in a run are skipped (canonical URL).
+- Next.js `/_next/data/<buildId>/` URLs: on 404 the current buildId is read from the site's home page and the URL rewritten.
+- Records carry `source` (endpoint name, e.g. `specialties/cardio`) used for groups in the panel and in the grouped JSON export.
+- **Feed for the owner's own website**: `GET /feed/sites` and `GET /feed/sections/{id}?since=&limit=&offset=&source=` with `?key=` or `X-API-Key` (env `HARSCRAPER_FEED_KEY`, else random key in `DATA_DIR/feed_key.txt`). Read-only; not behind Basic auth.
 
 ## Likely production issues to check first
 1. **Arvan CDN caching** API responses → site list doesn't update after save. Fixed in code with `Cache-Control: no-store` middleware (needs deploy + purge CDN cache). Also consider a CDN rule to bypass cache for the whole host.

@@ -9,13 +9,13 @@ from pathlib import Path
 from urllib.parse import quote
 
 from apscheduler.schedulers.background import BackgroundScheduler
-from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse, Response
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from pydantic import BaseModel, Field
 
 from . import db, har, scraper
-from .config import ADMIN_PASS, ADMIN_USER, OUTPUT_DIR
+from .config import ADMIN_PASS, ADMIN_USER, DATA_DIR, FEED_KEY, OUTPUT_DIR
 
 STATIC = Path(__file__).parent / "static"
 scheduler = BackgroundScheduler(timezone="UTC")
@@ -183,7 +183,7 @@ def delete_site(site_id: int):
 # ---------- Sections (categories) ----------
 class CategoryIn(BaseModel):
     name: str = Field(min_length=1)
-    max_pages: int = Field(1, ge=1, le=500)
+    max_pages: int = Field(200, ge=1, le=1000)
 
 
 def _get_cat(c, cid):
@@ -289,17 +289,22 @@ def _columns(rows: list[dict], limit: int | None = None) -> list[str]:
 
 
 @app.get("/api/categories/{cid}/items", dependencies=[Depends(auth)])
-def list_items(cid: int, q: str = "", limit: int = 50, offset: int = 0):
+def list_items(cid: int, q: str = "", source: str = "", limit: int = 50, offset: int = 0):
     with db.conn() as c:
         _get_cat(c, cid)
+        groups = [{"source": r["source"] or "—", "count": r["n"]} for r in c.execute(
+            "SELECT source, COUNT(*) n FROM items WHERE category_id=? GROUP BY source ORDER BY n DESC", (cid,))]
         where, args = "category_id=?", [cid]
+        if source:
+            where += " AND source=?"
+            args.append(source)
         if q:
             where += " AND data LIKE ?"
             args.append(f"%{q}%")
         total = c.execute(f"SELECT COUNT(*) FROM items WHERE {where}", args).fetchone()[0]
         rows = [json.loads(r["data"]) for r in c.execute(
             f"SELECT data FROM items WHERE {where} ORDER BY id LIMIT ? OFFSET ?", args + [min(limit, 500), offset])]
-    return {"total": total, "columns": _columns(rows, 8), "rows": rows}
+    return {"total": total, "groups": groups, "columns": _columns(rows, 8), "rows": rows}
 
 
 @app.delete("/api/categories/{cid}/items", dependencies=[Depends(auth)])
@@ -310,18 +315,29 @@ def clear_items(cid: int):
 
 
 @app.get("/api/categories/{cid}/export", dependencies=[Depends(auth)])
-def export_items(cid: int, fmt: str = "csv"):
+def export_items(cid: int, fmt: str = "json", source: str = ""):
     with db.conn() as c:
         cat = _get_cat(c, cid)
         site = _get_site(c, cat["site_id"])
-        items = [dict(json.loads(r["data"]), _first_seen=r["first_seen"], _last_seen=r["last_seen"])
-                 for r in c.execute("SELECT data, first_seen, last_seen FROM items WHERE category_id=? ORDER BY id", (cid,))]
-    name = f"{site['name']}-{cat['name']}"
+        sql, args = "SELECT data, source, first_seen, last_seen FROM items WHERE category_id=?", [cid]
+        if source:
+            sql += " AND source=?"
+            args.append(source)
+        rows = c.execute(sql + " ORDER BY id", args).fetchall()
+    name = f"{site['name']}-{cat['name']}" + (f"-{source.replace('/', '_')}" if source else "")
     if fmt == "json":
-        body, media, ext = json.dumps(items, ensure_ascii=False, indent=2).encode(), "application/json", "json"
+        groups: dict[str, list] = {}
+        for r in rows:
+            groups.setdefault(r["source"] or "—", []).append(json.loads(r["data"]))
+        doc = {"site": site["name"], "section": cat["name"], "contract_ref": site["contract_ref"],
+               "generated_at": db.now(), "total": len(rows),
+               "groups": [{"source": k, "count": len(v), "items": v} for k, v in groups.items()]}
+        body, media, ext = json.dumps(doc, ensure_ascii=False, indent=2).encode(), "application/json", "json"
     else:
+        items = [dict(json.loads(r["data"]), _source=r["source"], _first_seen=r["first_seen"], _last_seen=r["last_seen"])
+                 for r in rows]
         buf = io.StringIO()
-        cols = [k for k in _columns(items) if not k.startswith("_")] + ["_first_seen", "_last_seen"]
+        cols = [k for k in _columns(items) if not k.startswith("_")] + ["_source", "_first_seen", "_last_seen"]
         w = csv.DictWriter(buf, fieldnames=cols, extrasaction="ignore")
         w.writeheader()
         w.writerows(items)
@@ -379,6 +395,72 @@ def run_output(run_id: int):
 def run_download(run_id: int):
     p = _run_file(run_id)
     return FileResponse(p, media_type="application/json", filename=p.name)
+
+
+# ---------- Feed for your own website (API key, read-only) ----------
+_feed_key = FEED_KEY
+
+
+def feed_key() -> str:
+    global _feed_key
+    if not _feed_key:
+        f = DATA_DIR / "feed_key.txt"
+        if not f.exists():
+            DATA_DIR.mkdir(parents=True, exist_ok=True)
+            f.write_text(secrets.token_urlsafe(24))
+        _feed_key = f.read_text().strip()
+    return _feed_key
+
+
+def feed_auth(key: str = Query(""), x_api_key: str = Header("")):
+    given = x_api_key or key
+    if not given or not secrets.compare_digest(given, feed_key()):
+        raise HTTPException(401, "کلید API نامعتبر است")
+
+
+@app.get("/api/feed-info", dependencies=[Depends(auth)])
+def feed_info():
+    return {"key": feed_key()}
+
+
+@app.get("/feed/sites", dependencies=[Depends(feed_auth)])
+def feed_sites():
+    """Every site and its sections, with record counts."""
+    with db.conn() as c:
+        out = []
+        for s in c.execute("SELECT id, name FROM sites ORDER BY id"):
+            sections = [{"id": r["id"], "name": r["name"], "count": r["n"], "url": f"/feed/sections/{r['id']}"}
+                        for r in c.execute("""SELECT categories.id, categories.name, COUNT(items.id) n FROM categories
+                                              LEFT JOIN items ON items.category_id=categories.id
+                                              WHERE site_id=? GROUP BY categories.id ORDER BY categories.id""", (s["id"],))]
+            out.append({"id": s["id"], "name": s["name"], "sections": sections})
+    return out
+
+
+@app.get("/feed/sections/{cid}", dependencies=[Depends(feed_auth)])
+def feed_section(cid: int, since: str = "", source: str = "", limit: int = Query(500, ge=1, le=5000), offset: int = Query(0, ge=0)):
+    """Records of one section. `since` (ISO time) returns only records added/updated after it, for incremental sync."""
+    with db.conn() as c:
+        cat = _get_cat(c, cid)
+        site = _get_site(c, cat["site_id"])
+        where, args = "category_id=?", [cid]
+        if since:
+            where += " AND last_seen>?"
+            args.append(since)
+        if source:
+            where += " AND source=?"
+            args.append(source)
+        total = c.execute(f"SELECT COUNT(*) FROM items WHERE {where}", args).fetchone()[0]
+        rows = c.execute(f"SELECT item_key, source, first_seen, last_seen, data FROM items WHERE {where} ORDER BY id LIMIT ? OFFSET ?",
+                         args + [limit, offset]).fetchall()
+    return {
+        "site": {"id": site["id"], "name": site["name"]},
+        "section": {"id": cid, "name": cat["name"]},
+        "total": total, "offset": offset,
+        "next_offset": offset + len(rows) if offset + len(rows) < total else None,
+        "items": [{"key": r["item_key"], "source": r["source"], "first_seen": r["first_seen"],
+                   "last_seen": r["last_seen"], "data": json.loads(r["data"])} for r in rows],
+    }
 
 
 # ---------- Panel ----------

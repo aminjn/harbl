@@ -28,7 +28,7 @@ CREATE TABLE IF NOT EXISTS categories (     -- a section of a site, e.g. doctors
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     site_id INTEGER NOT NULL REFERENCES sites(id) ON DELETE CASCADE,
     name TEXT NOT NULL,
-    max_pages INTEGER NOT NULL DEFAULT 1,   -- follow ?page=N up to this many pages
+    max_pages INTEGER NOT NULL DEFAULT 200, -- follow ?page=N up to this many pages
     created_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS items (          -- records extracted from responses, deduplicated per category
@@ -37,6 +37,7 @@ CREATE TABLE IF NOT EXISTS items (          -- records extracted from responses,
     item_key TEXT NOT NULL,
     data TEXT NOT NULL,                     -- JSON dict (flattened)
     source_url TEXT,
+    source TEXT,                            -- endpoint name, used to group records
     first_seen TEXT NOT NULL,
     last_seen TEXT NOT NULL,
     UNIQUE(category_id, item_key)
@@ -95,9 +96,13 @@ def init():
         for table in ("requests", "runs"):
             if "category_id" not in {r["name"] for r in c.execute(f"PRAGMA table_info({table})")}:
                 c.execute(f"ALTER TABLE {table} ADD COLUMN category_id INTEGER REFERENCES categories(id) ON DELETE CASCADE")
+        if "source" not in {r["name"] for r in c.execute("PRAGMA table_info(items)")}:
+            c.execute("ALTER TABLE items ADD COLUMN source TEXT")
+        # Sections created when the default was a single page: collect all pages now
+        c.execute("UPDATE categories SET max_pages=200 WHERE max_pages=1")
         # Requests imported before sections existed go to a default section
         for (site_id,) in c.execute("SELECT DISTINCT site_id FROM requests WHERE category_id IS NULL").fetchall():
-            cid = c.execute("INSERT INTO categories(site_id, name, created_at) VALUES (?,?,?)",
+            cid = c.execute("INSERT INTO categories(site_id, name, max_pages, created_at) VALUES (?,?,200,?)",
                             (site_id, "عمومی", now())).lastrowid
             c.execute("UPDATE requests SET category_id=? WHERE site_id=? AND category_id IS NULL", (cid, site_id))
         # Runs interrupted by a restart would otherwise show "running" forever
