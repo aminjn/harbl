@@ -142,8 +142,8 @@ details{margin:10px 0}summary{cursor:pointer;color:var(--mute);font-size:13px}
     <input id="rec-url" dir="ltr" style="flex:1;min-width:200px" onkeydown="if(event.key==='Enter')recIn({type:'goto',url:this.value})">
     <button class="pri" onclick="recStop(true)">✓ پایان و ذخیره</button><button class="bad" onclick="recStop(false)">لغو</button>
   </div>
-  <p class="note" id="rec-help" style="margin:0 0 8px">روی تصویر کلیک کنید و تایپ کنید (اول روی کادر متن در سایت کلیک کنید). <b>۱.</b> لاگین کنید <b>۲.</b> صفحه‌های این بخش را باز کنید و صفحه بعد را بزنید <b>۳.</b> روی یک مورد کلیک کنید و اطلاعات کامل/شماره را باز کنید <b>۴.</b> «پایان و ذخیره». <span id="rec-st"></span></p>
-  <div id="rec-pick" class="chips" style="margin:0 0 8px"></div>
+  <p class="note" id="rec-help" style="margin:0 0 8px">روی تصویر کلیک کنید و تایپ کنید (اول روی کادر متن در سایت کلیک کنید). <b>۱.</b> لاگین کنید <b>۲.</b> صفحه‌های این بخش را باز کنید و صفحه بعد را بزنید <b>۳.</b> روی یک مورد کلیک کنید و اطلاعات کامل/شماره را باز کنید <b>۴.</b> «پایان و ذخیره».</p>
+  <div class="row" style="justify-content:space-between;margin:0 0 8px"><div id="rec-pick" class="chips" style="margin:0"></div><small id="rec-st" class="failed"></small></div>
   <img id="rec-img" tabindex="0" alt="">
   <div class="row" style="margin-top:8px"><input id="rec-text" placeholder="متن طولانی یا فارسی را اینجا بنویسید و «ارسال» بزنید (مثلاً شماره موبایل یا کد)" style="flex:1" onkeydown="if(event.key==='Enter'){recSendText();event.preventDefault()}">
     <button onclick="recSendText()">ارسال متن</button><button onclick="recIn({type:'key',key:'Enter'})">Enter ↵</button></div>
@@ -426,13 +426,16 @@ const REC_HELP_VISUAL='روی تصویر کلیک کنید و تایپ کنید�
 let recHelpApi=null;
 function recOpen(url){vArm=null;vBar();recHelpApi??=$('#rec-help').innerHTML;$('#rec-help').innerHTML=cat?.mode==='visual'?REC_HELP_VISUAL:recHelpApi;$('#rec').classList.remove('hidden');$('#rec-url').value=url||'';$('#rec-img').focus();clearInterval(recTimer);recShot();recTimer=setInterval(recShot,700)}
 async function recShot(){if(recBusy)return;recBusy=true;
-  try{const r=await fetch('/api/recorder/screen',{cache:'no-store'});
+  // never wait on one picture for long: a stuck request would freeze the screen
+  const ac=new AbortController(),tm=setTimeout(()=>ac.abort(),8000);
+  try{const r=await fetch('/api/recorder/screen?t='+Date.now(),{cache:'no-store',signal:ac.signal});
     if(r.status===409){recClose();toast('ضبط بسته شد (مدت زیادی بدون استفاده بود)');return}
     const pu=r.headers.get('X-Page-Url');if(pu&&document.activeElement!==$('#rec-url'))$('#rec-url').value=dec(pu);
     if(r.ok){const u=URL.createObjectURL(await r.blob()),img=$('#rec-img'),old=img.src;img.src=u;if(old.startsWith('blob:'))URL.revokeObjectURL(old)}}
-  catch{}finally{recBusy=false}}
-async function recIn(ev){$('#rec-st').textContent='…';
-  try{const r=await jpost('/api/recorder/input',ev);if(r.url)$('#rec-url').value=r.url;$('#rec-st').textContent=''}catch(err){$('#rec-st').textContent=err.message}
+  catch{}finally{clearTimeout(tm);recBusy=false}}
+const recSt=t=>{const e=$('#rec-st');if(e)e.textContent=t};
+async function recIn(ev){recSt('…');
+  try{const r=await jpost('/api/recorder/input',ev);if(r.url)$('#rec-url').value=r.url;recSt(r.warning?'صفحه کامل بار نشد؛ ادامه دهید':'')}catch(err){recSt(err.message)}
   setTimeout(recShot,250);setTimeout(recShot,1200)}
 function recSendText(){const t=$('#rec-text');if(!t.value)return;recIn({type:'text',text:t.value});t.value=''}
 function recClose(){clearInterval(recTimer);$('#rec').classList.add('hidden')}

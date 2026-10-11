@@ -19,7 +19,7 @@ from urllib.parse import urlparse
 
 from . import db
 from .config import DATA_DIR
-from .har import host_allowed
+from .har import host_allowed, is_tracker
 
 SESSIONS = DATA_DIR / "sessions"
 
@@ -132,6 +132,7 @@ def run(cat: dict, site: dict, progress, log) -> dict:
         sess = session_file(cat["id"])
         ctx = browser.new_context(viewport={"width": 1280, "height": 900}, locale="fa-IR",
                                   storage_state=str(sess) if sess.exists() else None)
+        ctx.route("**/*", lambda r: r.abort() if r.request.resource_type != "document" and is_tracker(r.request.url) else r.continue_())
         page = ctx.new_page()
 
         def open_(url: str) -> bool:

@@ -4,15 +4,24 @@ Needs the optional `playwright` package and its Chromium (see deploy/install-rec
 Only one recording runs at a time; it is closed automatically after IDLE_SECONDS without input.
 """
 import asyncio
+import base64
 import time
 
-from . import visual
+from . import har, visual
 from .config import DATA_DIR
 
 WIDTH, HEIGHT = 1280, 800
 IDLE_SECONDS = 20 * 60
 SPECIAL_KEYS = {"Enter", "Backspace", "Tab", "Escape", "Delete", "ArrowUp", "ArrowDown", "ArrowLeft",
                 "ArrowRight", "Home", "End", "PageUp", "PageDown"}
+
+
+async def _skip_trackers(route):
+    """Ads/analytics/Google hosts are slow or blocked from Iranian servers and hold pages up; they carry no data."""
+    if route.request.resource_type != "document" and har.is_tracker(route.request.url):
+        await route.abort()
+    else:
+        await route.continue_()
 
 
 class RecorderError(Exception):
@@ -27,6 +36,7 @@ class Recorder:
         self.last_input = 0.0
         self.lock = asyncio.Lock()
         self._watchdog: asyncio.Task | None = None
+        self._cdp = self._cdp_page = None
 
     @property
     def active(self) -> bool:
@@ -59,6 +69,7 @@ class Recorder:
                 else:
                     self.har_path = None
                 self.context = await self.browser.new_context(**opts)
+                await self.context.route("**/*", _skip_trackers)
                 self.page = await self.context.new_page()
                 # A link that opens a new tab: follow it in the single visible tab instead
                 self.context.on("page", self._adopt_page)
@@ -87,7 +98,12 @@ class Recorder:
     async def screenshot(self) -> bytes:
         if not self.active:
             raise RecorderError("ضبطی در حال انجام نیست")
-        return await self.page.screenshot(type="jpeg", quality=60)
+        # Straight from Chrome: page.screenshot() waits for web fonts and hangs when a font host is slow/blocked
+        if self._cdp_page is not self.page:
+            self._cdp = await self.context.new_cdp_session(self.page)
+            self._cdp_page = self.page
+        shot = await asyncio.wait_for(self._cdp.send("Page.captureScreenshot", {"format": "jpeg", "quality": 60}), 10)
+        return base64.b64decode(shot["data"])
 
     async def input(self, ev: dict):
         page = self._page()
@@ -148,6 +164,7 @@ class Recorder:
                 await self.pw.stop()
             except Exception:
                 pass
+        self._cdp = self._cdp_page = None
         self.pw = self.browser = self.context = self.page = None
         self.category_id = None
 
