@@ -17,6 +17,14 @@ PW="$APP_DIR/venv/bin/playwright"
 [ "$(id -u)" -eq 0 ] || { echo "با sudo اجرا کنید"; exit 1; }
 export PLAYWRIGHT_BROWSERS_PATH="$BROWSERS"
 export PLAYWRIGHT_DOWNLOAD_CONNECTION_TIMEOUT=120000
+# Newer Ubuntu releases (e.g. 26.04) are unknown to this Playwright version: use the 24.04 build of Chromium
+PLATFORM_OVERRIDE=""
+. /etc/os-release 2>/dev/null || true
+if [ "${ID:-}" = "ubuntu" ] && ! printf '%s\n' 20.04 22.04 24.04 | grep -qx "${VERSION_ID:-}"; then
+  PLATFORM_OVERRIDE="ubuntu24.04-x64"
+  export PLAYWRIGHT_HOST_PLATFORM_OVERRIDE="$PLATFORM_OVERRIDE"
+  echo "==> Ubuntu ${VERSION_ID:-?}: مرورگر نسخه Ubuntu 24.04 استفاده می‌شود"
+fi
 
 offline_help() {
   cat <<HELP
@@ -93,7 +101,16 @@ SHELL_DIR="$(echo "$INFO" | awk '/chromium-headless-shell/{f=1} f&&/Install loca
 SHELL_URL="$(echo "$INFO" | awk '/chromium-headless-shell/{f=1} f&&/Download url/{print $3; exit}')"
 
 echo "==> کتابخانه‌های سیستمی لازم برای Chromium (از مخزن Ubuntu)"
-"$PW" install-deps chromium || echo "    هشدار: نصب بعضی کتابخانه‌ها ناموفق بود"
+if ! "$PW" install-deps chromium; then
+  # install them one by one so a renamed package on a newer release does not stop the rest
+  apt-get update -y >/dev/null 2>&1 || true
+  for pkg in libasound2t64 libasound2 libatk-bridge2.0-0t64 libatk1.0-0t64 libatspi2.0-0t64 libcairo2 libcups2t64 \
+             libdbus-1-3 libdrm2 libgbm1 libglib2.0-0t64 libnspr4 libnss3 libpango-1.0-0 libx11-6 libxcb1 \
+             libxcomposite1 libxdamage1 libxext6 libxfixes3 libxkbcommon0 libxrandr2 libxshmfence1 \
+             fonts-liberation fonts-noto-core fonts-noto-color-emoji fonts-vazirmatn; do
+    DEBIAN_FRONTEND=noninteractive apt-get install -y -q "$pkg" >/dev/null 2>&1 && echo "      ✓ $pkg" || echo "      - $pkg (نبود)"
+  done
+fi
 
 echo "==> دانلود Chromium (حدود ۱۰۰ مگابایت؛ ممکن است چند دقیقه طول بکشد)"
 mkdir -p "$BROWSERS"
@@ -132,12 +149,13 @@ mkdir -p /etc/systemd/system/har-scraper.service.d
 cat > /etc/systemd/system/har-scraper.service.d/recorder.conf <<CONF
 [Service]
 Environment=PLAYWRIGHT_BROWSERS_PATH=$BROWSERS
+${PLATFORM_OVERRIDE:+Environment=PLAYWRIGHT_HOST_PLATFORM_OVERRIDE=$PLATFORM_OVERRIDE}
 CONF
 systemctl daemon-reload
 systemctl restart har-scraper
 
 echo "==> آزمایش اجرای مرورگر"
-if sudo -u harscraper env PLAYWRIGHT_BROWSERS_PATH="$BROWSERS" HOME=/var/lib/har-scraper "$APP_DIR/venv/bin/python" -c \
+if sudo -u harscraper env PLAYWRIGHT_BROWSERS_PATH="$BROWSERS" PLAYWRIGHT_HOST_PLATFORM_OVERRIDE="$PLATFORM_OVERRIDE" HOME=/var/lib/har-scraper "$APP_DIR/venv/bin/python" -c \
   "from playwright.sync_api import sync_playwright as s
 with s() as p: b=p.chromium.launch(); b.close()"; then
   echo "✅ مرورگر ضبط نصب شد. در پنل، داخل هر بخش «🎥 ضبط با مرورگر» را بزنید."
