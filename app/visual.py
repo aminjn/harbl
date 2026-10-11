@@ -27,6 +27,14 @@ SESSIONS = DATA_DIR / "sessions"
 # Runs in the page. Returns what is under (x, y) and selectors that find it again.
 PICK_JS = r"""
 ([x, y, where, itemSel, attr, up]) => {
+  // readable text of an element without buttons, icons and "show more/less"-style controls
+  const __ui = /^(مشاهده|نمایش|ادامه|مطلب|کامل|بیشتر|کمتر|بستن|show|read|see|view|more|less|[\s.…»«<>›‹\-])+$/i;
+  const __txt = e => { if (!e) return null; const c = e.cloneNode(true);
+    c.querySelectorAll('button,[role=button],svg,script,style,noscript,input,select,textarea,.__hl').forEach(x => x.remove());
+    c.querySelectorAll('a,span,div,p,small,i').forEach(x => { const t = (x.textContent || '').trim();
+      if (t && t.length < 30 && __ui.test(t)) x.remove(); });
+    c.querySelectorAll('p,div,li,br,h1,h2,h3,h4,h5,h6,tr,section,article').forEach(x => x.append(' '));
+    return (c.textContent || '').replace(/\s+/g, ' ').trim(); };
   document.querySelectorAll('.__pick').forEach(e => e.classList.remove('__pick'));
   let el = document.elementFromPoint(x, y);
   if (!el) return {error: 'چیزی زیر این نقطه نیست'};
@@ -43,7 +51,7 @@ PICK_JS = r"""
   const path = (e, stop, tagsOnly) => { const p = []; while (e && e !== stop && e.nodeType === 1 && e !== document.documentElement) {
                      p.unshift(tagsOnly ? e.tagName.toLowerCase() : seg(e)); e = e.parentElement; } return p.join(' > '); };
   const value = e => attr === 'href' ? (e.closest('a')?.href || '') : attr === 'src' ? (e.currentSrc || e.src || '')
-                     : (e.innerText || e.textContent || '').trim().replace(/\s+/g, ' ');
+                     : __txt(e);
   const mark = els => { document.querySelectorAll('.__pick').forEach(e => { e.classList.remove('__pick'); });
                         if (!document.getElementById('__pickcss')) { const st = document.createElement('style'); st.id = '__pickcss';
                           st.textContent = '.__pick{outline:3px solid #f43f5e!important;outline-offset:1px}'; document.head.appendChild(st); }
@@ -87,6 +95,14 @@ PICK_JS = r"""
 # the element under the mouse. Returns its rectangle, the `up` count for PICK_JS and a text preview.
 HOVER_JS = r"""
 ([x, y, mode, where, itemSel, attr]) => {
+  // readable text of an element without buttons, icons and "show more/less"-style controls
+  const __ui = /^(مشاهده|نمایش|ادامه|مطلب|کامل|بیشتر|کمتر|بستن|show|read|see|view|more|less|[\s.…»«<>›‹\-])+$/i;
+  const __txt = e => { if (!e) return null; const c = e.cloneNode(true);
+    c.querySelectorAll('button,[role=button],svg,script,style,noscript,input,select,textarea,.__hl').forEach(x => x.remove());
+    c.querySelectorAll('a,span,div,p,small,i').forEach(x => { const t = (x.textContent || '').trim();
+      if (t && t.length < 30 && __ui.test(t)) x.remove(); });
+    c.querySelectorAll('p,div,li,br,h1,h2,h3,h4,h5,h6,tr,section,article').forEach(x => x.append(' '));
+    return (c.textContent || '').replace(/\s+/g, ' ').trim(); };
   const el0 = document.elementFromPoint(x, y);
   if (!el0) return null;
   const card0 = where === 'list' && itemSel ? el0.closest(itemSel) : null;
@@ -112,28 +128,60 @@ HOVER_JS = r"""
   if (attr === 'src') el = el.closest('img') || el;
   const r = el.getBoundingClientRect();
   return {up, x: r.left, y: r.top, w: r.width, h: r.height,
-          text: (el.innerText || el.textContent || '').trim().replace(/\s+/g, ' ').slice(0, 140)};
+          text: (__txt(el) || '').slice(0, 140)};
 }
+"""
+
+# Runs in the page before reading it: open "show more" style expanders (not links that navigate).
+EXPAND_JS = r"""
+() => { let n = 0;
+  for (const e of document.querySelectorAll('button,[role=button],span,div,a,p')) {
+    const t = (e.textContent || '').trim();
+    if (t.length > 25 || !/^(مشاهده|نمایش|ادامه|بیشتر|show more|read more|see more)/i.test(t) || /کمتر|less/i.test(t)) continue;
+    if (/شماره|تلفن|تماس|phone/i.test(t)) continue;           // "show number" is the user's own button
+    if (e.tagName === 'A' && e.getAttribute('href') && !e.getAttribute('href').startsWith('#')) continue;
+    if (e.children.length > 3) continue;
+    try { e.click(); n++; } catch (_) {}
+  }
+  return n; }
 """
 
 # Runs in the page: read every card of a list page.
 LIST_JS = r"""
-([itemSel, fields]) => [...document.querySelectorAll(itemSel)].map(c => {
+([itemSel, fields]) => {
+  // readable text of an element without buttons, icons and "show more/less"-style controls
+  const __ui = /^(مشاهده|نمایش|ادامه|مطلب|کامل|بیشتر|کمتر|بستن|show|read|see|view|more|less|[\s.…»«<>›‹\-])+$/i;
+  const __txt = e => { if (!e) return null; const c = e.cloneNode(true);
+    c.querySelectorAll('button,[role=button],svg,script,style,noscript,input,select,textarea,.__hl').forEach(x => x.remove());
+    c.querySelectorAll('a,span,div,p,small,i').forEach(x => { const t = (x.textContent || '').trim();
+      if (t && t.length < 30 && __ui.test(t)) x.remove(); });
+    c.querySelectorAll('p,div,li,br,h1,h2,h3,h4,h5,h6,tr,section,article').forEach(x => x.append(' '));
+    return (c.textContent || '').replace(/\s+/g, ' ').trim(); };
+  return [...document.querySelectorAll(itemSel)].map(c => {
   const o = {};
   for (const f of fields) {
     const e = f.rel === ':scope' ? c : (c.querySelector(':scope > ' + f.rel) || c.querySelector(':scope > ' + f.rel_tags));
     o[f.name] = !e ? null : f.attr === 'href' ? (e.closest('a')?.href || null) : f.attr === 'src' ? (e.currentSrc || e.src || null)
-              : (e.innerText || e.textContent || '').trim().replace(/\s+/g, ' ');
+              : __txt(e);
   }
   return o;
-})
+}); }
 """
 
 DETAIL_JS = r"""
-(fields) => { const o = {};
+(fields) => {
+  // readable text of an element without buttons, icons and "show more/less"-style controls
+  const __ui = /^(مشاهده|نمایش|ادامه|مطلب|کامل|بیشتر|کمتر|بستن|show|read|see|view|more|less|[\s.…»«<>›‹\-])+$/i;
+  const __txt = e => { if (!e) return null; const c = e.cloneNode(true);
+    c.querySelectorAll('button,[role=button],svg,script,style,noscript,input,select,textarea,.__hl').forEach(x => x.remove());
+    c.querySelectorAll('a,span,div,p,small,i').forEach(x => { const t = (x.textContent || '').trim();
+      if (t && t.length < 30 && __ui.test(t)) x.remove(); });
+    c.querySelectorAll('p,div,li,br,h1,h2,h3,h4,h5,h6,tr,section,article').forEach(x => x.append(' '));
+    return (c.textContent || '').replace(/\s+/g, ' ').trim(); };
+  const o = {};
   for (const f of fields) { const e = document.querySelector(f.selector);
     o[f.name] = !e ? null : f.attr === 'href' ? (e.closest('a')?.href || null) : f.attr === 'src' ? (e.currentSrc || e.src || null)
-              : (e.innerText || e.textContent || '').trim().replace(/\s+/g, ' '); }
+              : __txt(e); }
   return o; }
 """
 
@@ -242,6 +290,11 @@ def run(cat: dict, site: dict, progress, log) -> dict:
                     page.wait_for_timeout(1500)
                 except Exception:
                     pass
+            try:  # collapsed boxes: open "show more" so the full text is read
+                if page.evaluate(EXPAND_JS):
+                    page.wait_for_timeout(700)
+            except Exception:
+                pass
             return page.evaluate(DETAIL_JS, detail_fields)
 
         def list_pages(base: str):
