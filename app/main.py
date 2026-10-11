@@ -252,9 +252,11 @@ def save_visual(cid: int, body: VisualIn):
     with db.conn() as c:
         cat = _get_cat(c, cid)
         site = _get_site(c, cat["site_id"])
-        url = body.list_url.strip()
-        if url and not (url.startswith(("http://", "https://")) and har.host_allowed(url.replace("{page}", "1"), site["allowed_domains"])):
-            raise HTTPException(400, "آدرس لیست باید روی دامنه همین سایت باشد (با http/https)")
+        lines = [u.strip() for u in body.list_url.splitlines() if u.strip()]
+        for u in lines:
+            if not (u.startswith(("http://", "https://")) and har.host_allowed(u.replace("{page}", "1"), site["allowed_domains"])):
+                raise HTTPException(400, f"این آدرس روی دامنه همین سایت نیست (با http/https بنویسید): {u[:80]}")
+        url = "\n".join(lines)
         fields = [{k: f.get(k) for k in ("name", "page", "attr", "rel", "rel_tags", "selector", "count", "sample", "raw",
                                          "after", "before", "remove", "replace", "digits")}
                   for f in body.fields if str(f.get("name") or "").strip()]

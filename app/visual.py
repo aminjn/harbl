@@ -27,6 +27,7 @@ SESSIONS = DATA_DIR / "sessions"
 # Runs in the page. Returns what is under (x, y) and selectors that find it again.
 PICK_JS = r"""
 ([x, y, where, itemSel, attr, up]) => {
+  document.querySelectorAll('.__pick').forEach(e => e.classList.remove('__pick'));
   let el = document.elementFromPoint(x, y);
   if (!el) return {error: 'چیزی زیر این نقطه نیست'};
   // "bigger": the surrounding box, `up` levels higher (never past the list card)
@@ -35,7 +36,8 @@ PICK_JS = r"""
   if (attr === 'href' || attr === 'click') el = el.closest('a,button,[role=button],[onclick]') || el;
   if (attr === 'src') el = el.closest('img') || el.querySelector?.('img') || el;
   const esc = CSS.escape;
-  const okClass = c => c.length < 40 && !/\d{4,}|^(active|hover|focus|selected|open|show|is-|has-)/.test(c) && !/^(css|jsx|sc)-[a-z0-9]+$/i.test(c);
+  // __pick is our own red outline from an earlier pick: never part of a selector
+  const okClass = c => c !== '__pick' && c.length < 40 && !/\d{4,}|^(active|hover|focus|selected|open|show|is-|has-)/.test(c) && !/^(css|jsx|sc)-[a-z0-9]+$/i.test(c);
   const seg = e => { let s = e.tagName.toLowerCase(); const cls = [...e.classList].filter(okClass).slice(0, 3);
                      if (cls.length) s += '.' + cls.map(esc).join('.'); return s; };
   const path = (e, stop, tagsOnly) => { const p = []; while (e && e !== stop && e.nodeType === 1 && e !== document.documentElement) {
@@ -154,19 +156,24 @@ def _key(row: dict, link_field: str | None) -> str:
 
 
 def run(cat: dict, site: dict, progress, log) -> dict:
-    """Walk the list pages and detail pages. progress(pages, rows, new, details); log(item) records each page."""
+    """Read every address of the section. progress(stats); log(item) records each page opened.
+
+    One address per line: with {page} it is a list walked page by page (then each record's detail
+    page if detail fields are picked); without {page} it is a single page whose fields make one record."""
     from playwright.sync_api import TimeoutError as PwTimeout, sync_playwright
 
     cfg = json.loads(cat.get("config") or "{}")
     list_fields = [f for f in cfg.get("fields", []) if f.get("page") == "list" and f.get("rel")]
     detail_fields = [f for f in cfg.get("fields", []) if f.get("page") == "detail" and f.get("selector")]
     link = cfg.get("detail_link")
-    if not cfg.get("list_url") or not cfg.get("item_selector") or not list_fields:
-        raise ValueError("اول آدرس لیست را بدهید و حداقل یک اطلاعات را روی صفحه لیست انتخاب کنید")
+    urls = [u.strip() for u in (cfg.get("list_url") or "").splitlines() if u.strip()]
+    if not urls:
+        raise ValueError("اول آدرس صفحه را در قدم ۱ بنویسید")
+    if not (list_fields and cfg.get("item_selector")) and not detail_fields:
+        raise ValueError("هنوز هیچ اطلاعاتی روی صفحه انتخاب نشده است")
     delay = max(site["delay_seconds"], 0)
     stats = {"pages": 0, "rows": 0, "new": 0, "details": 0}
-    paged = "{page}" in cfg["list_url"]
-    max_pages = int(cfg.get("max_pages") or 200) if paged else 1
+    max_pages = int(cfg.get("max_pages") or 200)
 
     with sync_playwright() as pw:
         browser = pw.chromium.launch(args=["--disable-dev-shm-usage"])
@@ -189,31 +196,58 @@ def run(cat: dict, site: dict, progress, log) -> dict:
                 log({"url": url, "error": str(e)[:300]})
                 return False
 
-        # 1) list pages
-        prev_first = None
-        for n in range(1, max_pages + 1):
-            url = page_url(cfg["list_url"], n)
-            if not open_(url):
-                break
+        def read_page() -> dict:
+            """The picked page fields of the open page (after the optional button click)."""
             try:
-                page.wait_for_selector(cfg["item_selector"], timeout=15000)
+                page.wait_for_selector(detail_fields[0]["selector"], timeout=15000, state="attached")
             except PwTimeout:
-                log({"url": url, "rows": 0})
-                break
-            page.mouse.wheel(0, 20000)  # lazy-loaded cards
-            page.wait_for_timeout(800)
-            rows = [r for r in page.evaluate(LIST_JS, [cfg["item_selector"], list_fields]) if any(r.values())]
-            log({"url": url, "rows": len(rows)})
-            first = json.dumps(rows[:1], ensure_ascii=False)
-            if not rows or first == prev_first:  # past the last page
-                break
-            prev_first = first
-            stats["pages"] += 1
-            stats["rows"] += len(rows)
-            stats["new"] += _save(cat["id"], rows, link, url)
-            progress(stats)
+                pass
+            if cfg.get("detail_click"):
+                try:
+                    page.click(cfg["detail_click"], timeout=5000)
+                    page.wait_for_timeout(1500)
+                except Exception:
+                    pass
+            return page.evaluate(DETAIL_JS, detail_fields)
 
-        # 2) detail pages, for records that do not have them yet
+        def list_pages(base: str):
+            prev_first = None
+            for n in range(1, max_pages + 1):
+                url = page_url(base, n)
+                if not open_(url):
+                    break
+                try:
+                    page.wait_for_selector(cfg["item_selector"], timeout=15000)
+                except PwTimeout:
+                    log({"url": url, "rows": 0})
+                    break
+                page.mouse.wheel(0, 20000)  # lazy-loaded cards
+                page.wait_for_timeout(800)
+                rows = [r for r in page.evaluate(LIST_JS, [cfg["item_selector"], list_fields]) if any(r.values())]
+                log({"url": url, "rows": len(rows)})
+                first = json.dumps(rows[:1], ensure_ascii=False)
+                if not rows or first == prev_first:  # past the last page
+                    break
+                prev_first = first
+                stats["pages"] += 1
+                stats["rows"] += len(rows)
+                stats["new"] += _save(cat["id"], rows, link, url)
+                progress(stats)
+
+        for base in urls:
+            if "{page}" in base and list_fields and cfg.get("item_selector"):
+                list_pages(base)
+            elif detail_fields and open_(base.replace("{page}", "1")):
+                # a single page: its picked fields make one record
+                row = {k: v for k, v in read_page().items() if v not in (None, "")}
+                log({"url": base, "found": len(row)})
+                if row:
+                    stats["pages"] += 1
+                    stats["rows"] += 1
+                    stats["new"] += _save(cat["id"], [{**row, "__url": base}], "__url", base, single=True)
+                    progress(stats)
+
+        # detail pages of list records that do not have them yet
         if detail_fields and link:
             with db.conn() as c:
                 todo = [(r["id"], json.loads(r["data"])) for r in c.execute(
@@ -222,17 +256,7 @@ def run(cat: dict, site: dict, progress, log) -> dict:
                 href = rec.get(link)
                 if not href or not open_(href):
                     continue
-                try:
-                    page.wait_for_selector(detail_fields[0]["selector"], timeout=15000, state="attached")
-                except PwTimeout:
-                    pass
-                if cfg.get("detail_click"):
-                    try:
-                        page.click(cfg["detail_click"], timeout=5000)
-                        page.wait_for_timeout(1500)
-                    except Exception:
-                        pass
-                extra = page.evaluate(DETAIL_JS, detail_fields)
+                extra = read_page()
                 log({"url": href, "detail": True, "found": sum(v is not None for v in extra.values())})
                 with db.conn() as c:
                     rec.update({k: v for k, v in extra.items() if v not in (None, "")})
@@ -244,7 +268,7 @@ def run(cat: dict, site: dict, progress, log) -> dict:
     return stats
 
 
-def _save(category_id: int, rows: list[dict], link: str | None, url: str) -> int:
+def _save(category_id: int, rows: list[dict], link: str | None, url: str, single: bool = False) -> int:
     new, ts, source = 0, db.now(), urlparse(url).path or "/"
     with db.conn() as c:
         for row in rows:
@@ -255,7 +279,8 @@ def _save(category_id: int, rows: list[dict], link: str | None, url: str) -> int
                 c.execute("UPDATE items SET data=?, source_url=?, last_seen=? WHERE id=?",
                           (json.dumps(merged, ensure_ascii=False), url, ts, old["id"]))
             else:
-                c.execute("INSERT INTO items(category_id, item_key, data, source_url, source, first_seen, last_seen) VALUES (?,?,?,?,?,?,?)",
-                          (category_id, key, json.dumps(row, ensure_ascii=False), url, "لیست", ts, ts))
+                # a single page is complete already: no detail page to visit
+                c.execute("INSERT INTO items(category_id, item_key, data, source_url, source, first_seen, last_seen, details_done) VALUES (?,?,?,?,?,?,?,?)",
+                          (category_id, key, json.dumps(row, ensure_ascii=False), url, "صفحه" if single else "لیست", ts, ts, "[v]" if single else ""))
                 new += 1
     return new
