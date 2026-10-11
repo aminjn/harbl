@@ -20,10 +20,11 @@ TRACKER_HOSTS = (
     "mixpanel.com", "segment.io", "segment.com", "amplitude.com", "webengage.com", "smartlook.com",
     "yandex.ru", "mc.yandex.ru", "bing.com", "linkedin.com", "twitter.com", "tiktok.com",
 )
-TRACKER_HOST_PREFIXES = ("sentry.", "analytics.", "stats.", "tracker.", "track.", "log.", "logs.", "metrics.", "telemetry.")
+TRACKER_HOST_PREFIXES = ("ads.", "ad.", "sentry.", "analytics.", "stats.", "tracker.", "track.", "log.", "logs.", "metrics.", "telemetry.")
 # Whole path segments only, so e.g. /api/track-order is not caught
 TRACKER_PATH_SEGMENTS = {"envelope", "collect", "track", "analytics", "beacon", "pixel", "telemetry",
-                         "sentry", "gtag", "gtm.js", "rum"}
+                         "sentry", "gtag", "gtm.js", "rum", "impressions", "impression",
+                         "asyncspc.php", "ajs.php", "lg.php", "ck.php"}
 
 
 def is_tracker(url: str) -> bool:
@@ -84,7 +85,7 @@ def extract(data: dict, allowed_domains: list[str], api_only: bool = True) -> tu
         req = e.get("request", {})
         url = req.get("url", "")
         method = req.get("method", "GET").upper()
-        if not url.startswith(("http://", "https://")):
+        if method in ("HEAD", "OPTIONS") or not url.startswith(("http://", "https://")):
             stats["static_or_non_api"] += 1
             continue
         if is_tracker(url):

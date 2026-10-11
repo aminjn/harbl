@@ -50,6 +50,15 @@ details{margin:10px 0}summary{cursor:pointer;color:var(--mute);font-size:13px}
 .sec{margin-top:18px}.sec h3{font-size:14px;margin:0 0 8px}
 .big{padding:9px 18px;font-size:15px}
 .warn{border-right-color:var(--bad)}
+.chips{display:flex;gap:6px;flex-wrap:wrap;margin:14px 0 4px}
+.chip{border-radius:99px;padding:5px 14px}
+.chip.on{background:var(--pri);border-color:var(--pri);color:#fff}
+.chip small{opacity:.75}
+.cat{border:1px solid var(--line);border-radius:10px;padding:14px;margin-top:8px}
+.tbl{overflow:auto;max-height:520px;border:1px solid var(--line);border-radius:8px}
+.tbl table{font-size:12px}.tbl th{position:sticky;top:0;background:var(--card);white-space:nowrap}
+.tbl td{max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.empty{text-align:center;padding:24px;border:2px dashed var(--line);border-radius:10px;color:var(--mute)}
 </style>
 </head>
 <body>
@@ -64,32 +73,26 @@ details{margin:10px 0}summary{cursor:pointer;color:var(--mute);font-size:13px}
 
   <section class="card" id="welcome">
     <h2>شروع</h2>
-    <p>۱. در Chrome کلید F12 را بزنید، تب <b>Network</b> را باز کنید و در سایت لاگین کنید و صفحه‌هایی را که داده‌شان را می‌خواهید باز کنید.<br>
-    ۲. روی لیست درخواست‌ها راست‌کلیک ← <b dir="ltr">Save all as HAR with content</b> (یا <span dir="ltr">Export HAR (with sensitive data)</span>).<br>
-    ۳. اینجا «+ سایت جدید» را بزنید و فایل را بدهید.</p>
+    <p>هر سایت چند <b>بخش</b> دارد (مثلاً پزشکان، مراکز درمانی، داروخانه‌ها). داده‌های هر بخش جدا ذخیره می‌شود و جدا خروجی Excel می‌گیرد.</p>
+    <p>برای هر بخش: در Chrome کلید F12 ← تب <b>Network</b> را باز کنید، فقط صفحه‌های همان بخش را در سایت باز کنید (مثلاً لیست پزشکان و صفحه ۲ آن) و بعد راست‌کلیک ← <b dir="ltr">Save all as HAR with content</b>.</p>
   </section>
 
   <!-- New site / settings form -->
   <section id="form-card" class="card hidden">
     <h2 id="f-title">سایت جدید</h2>
     <form id="f-site" onsubmit="saveSite(event)">
-      <div class="step" id="har-step"><b class="n">۱</b>فایل HAR
-        <input type="file" id="new-har-file" accept=".har,application/json" onchange="pickHar(this)" style="margin-top:8px">
-        <small id="new-har-info" class="note" style="display:block;margin-top:6px"></small>
-      </div>
       <div class="grid2">
-        <div><label>نام سایت</label><input name="name" required></div>
+        <div><label>نام سایت</label><input name="name" required placeholder="مثلاً دکتر دکتر"></div>
         <div><label>شماره قرارداد</label><input name="contract_ref" required></div>
+        <div><label>آدرس یا دامنه سایت</label><input name="allowed_domains" dir="ltr" placeholder="drdr.ir" required></div>
+        <div><label>اجرای خودکار همه بخش‌ها</label>
+          <select name="schedule_minutes">
+            <option value="">فقط دستی</option><option value="60">هر ساعت</option><option value="180">هر ۳ ساعت</option>
+            <option value="360">هر ۶ ساعت</option><option value="720">هر ۱۲ ساعت</option><option value="1440">روزانه</option><option value="10080">هفتگی</option>
+          </select></div>
       </div>
-      <details id="more"><summary>تنظیمات بیشتر (دامنه، زمان‌بندی، کوکی…)</summary>
+      <details id="more"><summary>تنظیمات بیشتر</summary>
         <div class="grid2">
-          <div><label>دامنه مجاز (خودکار از HAR؛ با کاما جدا کنید)</label><input name="allowed_domains" dir="ltr" placeholder="example.com"></div>
-          <div><label>اجرای خودکار</label>
-            <select name="schedule_minutes">
-              <option value="">فقط دستی</option><option value="15">هر ۱۵ دقیقه</option><option value="30">هر ۳۰ دقیقه</option>
-              <option value="60">هر ساعت</option><option value="180">هر ۳ ساعت</option><option value="360">هر ۶ ساعت</option>
-              <option value="720">هر ۱۲ ساعت</option><option value="1440">روزانه</option>
-            </select></div>
           <div><label>تاریخ پایان قرارداد (میلادی، اختیاری)</label><input name="contract_expires" type="date"></div>
           <div><label>فاصله بین درخواست‌ها (ثانیه)</label><input name="delay_seconds" type="number" step="0.1" min="0" value="1"></div>
         </div>
@@ -107,34 +110,20 @@ details{margin:10px 0}summary{cursor:pointer;color:var(--mute);font-size:13px}
     <div class="row" style="justify-content:space-between">
       <h2 id="d-title" style="margin:0"></h2>
       <div class="row">
-        <button class="pri big" id="btn-run" onclick="runNow()">▶ گرفتن داده</button>
-        <button onclick="editSite()">تنظیمات</button>
-        <button class="bad" onclick="delSite()">حذف</button>
+        <button id="btn-run-all" onclick="runAll()">▶ گرفتن داده همه بخش‌ها</button>
+        <button onclick="editSite()">تنظیمات سایت</button>
+        <button class="bad" onclick="delSite()">حذف سایت</button>
       </div>
     </div>
-    <div id="har-stats" style="margin-top:10px"></div>
-
-    <div class="sec">
-      <div class="row" style="justify-content:space-between">
-        <h3 id="reqs-title">درخواست‌ها</h3>
-        <label style="margin:0;cursor:pointer;color:var(--pri)">↻ آپلود HAR جدید<input type="file" accept=".har,application/json" class="hidden" onchange="if(this.files[0])sendHar(this.files[0]).then(()=>this.value='')"></label>
-      </div>
-      <div id="reqs"></div>
-    </div>
-
-    <div class="sec">
-      <h3>نتیجه‌ها</h3>
-      <div id="runs"></div>
-      <div id="output" class="hidden" style="margin-top:12px">
-        <div class="row" style="justify-content:space-between"><b id="o-title"></b><a id="o-dl"><button>دانلود JSON</button></a></div>
-        <pre id="o-pre"></pre>
-      </div>
-    </div>
+    <div class="chips" id="chips"></div>
+    <div id="cat"></div>
   </section>
 </main>
+<input type="file" id="har-input" accept=".har,application/json" class="hidden" onchange="if(this.files[0])sendHar(this.files[0]).finally(()=>this.value='')">
 <div id="toast"></div>
 <script>
-let sites=[], cur=null, poll=null, pendingHar=null;
+let sites=[], cur=null, cats=[], cat=null, poll=null, q='', page=0;
+const PAGE=50;
 const $=s=>document.querySelector(s);
 const fa=n=>String(n).replace(/\d/g,d=>'۰۱۲۳۴۵۶۷۸۹'[d]);
 const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
@@ -145,96 +134,123 @@ async function api(path,opt={}){let r;try{r=await fetch(path,{cache:'no-store',.
   const j=await r.json().catch(()=>null);
   if(!r.ok){const d=j?.detail;throw new Error((Array.isArray(d)?d.map(x=>x.msg).join('، '):d)||`خطای ${r.status}${httpHint[r.status]?' — '+httpHint[r.status]:''}`)}
   if(j===null)throw new Error('پاسخ سرور JSON نیست (احتمالاً کش CDN)');return j}
+const jpost=(path,body,method='POST')=>api(path,{method,headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+const dec=s=>{try{return decodeURIComponent(s)}catch{return s}};
 const fmt=s=>s?new Date(s).toLocaleString('fa-IR'):'—';
 function show(id){['welcome','form-card','site-card'].forEach(x=>$('#'+x).classList.toggle('hidden',x!==id))}
 
+// ----- sites -----
 async function loadSites(){
   sites=await api('/api/sites');
   $('#sites').innerHTML=sites.length?sites.map(s=>`
     <div class="site ${cur?.id===s.id?'active':''}" onclick="openSite(${s.id})">
       <b>${esc(s.name)}</b> ${s.enabled?'':'<span class="tag failed">غیرفعال</span>'}
-      <small>${fa(s.request_count)} درخواست · آخرین اجرا: ${s.running?'<span class="running">در حال اجرا…</span>':s.last_run?`<span class="${s.last_run.status}">${stName[s.last_run.status]}</span>`:'—'}</small>
+      <small>${fa(s.category_count)} بخش · ${fa(s.item_count)} رکورد ${s.running?'· <span class="running">در حال اجرا…</span>':''}</small>
     </div>`).join(''):'<p class="note">هنوز سایتی ثبت نشده.</p>';
-  if(cur){const c=sites.find(s=>s.id===cur.id);if(c){cur=c;$('#btn-run').disabled=c.running;$('#btn-run').textContent=c.running?'در حال اجرا…':'▶ گرفتن داده'}}
+  if(cur){const c=sites.find(s=>s.id===cur.id);if(c)cur=c}
 }
-
-// ----- form -----
-function fillForm(s){const f=$('#f-site');f.reset();$('#new-har-info').textContent='';pendingHar=null;
+function fillForm(s){const f=$('#f-site');f.reset();$('#eh-names').textContent='';
   if(!s)return;f.name.value=s.name;f.contract_ref.value=s.contract_ref;f.allowed_domains.value=s.allowed_domains.join(', ');
   f.contract_expires.value=s.contract_expires||'';f.delay_seconds.value=s.delay_seconds;f.schedule_minutes.value=s.schedule_minutes||'';f.enabled.checked=!!s.enabled;
   $('#eh-names').textContent=s.extra_header_names?.length?`ثبت‌شده: ${s.extra_header_names.join('، ')} (برای حذف فقط «Name:» بنویسید)`:''}
-function newSite(){cur=null;fillForm(null);$('#eh-names').textContent='';$('#f-title').textContent='سایت جدید';$('#har-step').classList.remove('hidden');
-  $('#more').open=false;$('#btn-save').textContent='ذخیره و ادامه';show('form-card');loadSites()}
-function editSite(){fillForm(cur);$('#f-title').textContent='تنظیمات '+cur.name;$('#har-step').classList.add('hidden');$('#more').open=true;$('#btn-save').textContent='ذخیره';show('form-card')}
+function newSite(){cur=null;fillForm(null);$('#f-title').textContent='سایت جدید';$('#more').open=false;show('form-card');loadSites();$('#f-site').name.focus()}
+function editSite(){fillForm(cur);$('#f-title').textContent='تنظیمات '+cur.name;show('form-card')}
 function cancelForm(){cur?openSite(cur.id):show('welcome')}
-
-// Main domain of a host: drdr.ir from api.drdr.ir, example.co.ir from www.example.co.ir
-function baseDomain(h){const p=h.split('.');if(p.length<=2||/^\d+$/.test(p.at(-1)))return h;
-  return (p.at(-1).length===2&&['co','ac','gov','org','com','net','id','sch'].includes(p.at(-2))?p.slice(-3):p.slice(-2)).join('.')}
-function pickHar(inp){const file=inp.files[0];pendingHar=file||null;$('#new-har-info').textContent='';if(!file)return;
-  $('#new-har-info').textContent='در حال خواندن فایل…';
-  const rd=new FileReader();rd.onload=()=>{try{
-    const d=JSON.parse(String(rd.result).replace(/^\uFEFF/,''));const es=d.log.entries;
-    // the site is the domain of the page itself (the "document" request), not trackers/APIs of others
-    const doc=es.find(e=>(e._resourceType||'').toLowerCase()==='document')||es[0];
-    const host=new URL(doc.request.url).hostname,dom=baseDomain(host),f=$('#f-site');
-    f.allowed_domains.value=dom;if(!f.name.value.trim())f.name.value=dom;
-    $('#new-har-info').textContent=`${fa(es.length)} درخواست در فایل · سایت: ${dom}`;
-  }catch(err){pendingHar=null;$('#new-har-info').textContent='فایل HAR معتبر نیست: '+err.message}};rd.readAsText(file)}
-
+// drdr.ir from "https://www.drdr.ir/some/page"
+function baseDomain(v){let h=v.trim().toLowerCase().replace(/^https?:\/\//,'').split('/')[0].split(':')[0].replace(/^www\./,'');return h}
 function parseHeaders(t){const o={};for(const line of t.split('\n')){const i=line.indexOf(':');if(i>0)o[line.slice(0,i).trim()]=line.slice(i+1).trim()}return o}
 async function saveSite(e){e.preventDefault();const f=e.target,isNew=!cur;
-  const domains=f.allowed_domains.value.split(',').map(s=>s.trim()).filter(Boolean);
-  if(isNew&&!pendingHar)return toast('فایل HAR را انتخاب کنید');
-  if(!domains.length){$('#more').open=true;f.allowed_domains.focus();return toast('دامنه سایت را وارد کنید')}
+  const domains=f.allowed_domains.value.split(',').map(baseDomain).filter(Boolean);
   const body={name:f.name.value,contract_ref:f.contract_ref.value,allowed_domains:domains,
     contract_expires:f.contract_expires.value||null,extra_headers:parseHeaders(f.extra_headers.value),delay_seconds:+f.delay_seconds.value||0,
     schedule_minutes:f.schedule_minutes.value?+f.schedule_minutes.value:null,enabled:f.enabled.checked};
-  const btn=$('#btn-save'),label=btn.textContent;btn.disabled=true;btn.textContent='در حال ذخیره…';
-  try{const s=await api(cur?`/api/sites/${cur.id}`:'/api/sites',{method:cur?'PUT':'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
-    await loadSites();const file=pendingHar;pendingHar=null;await openSite(s.id);
-    if(isNew&&file)await sendHar(file);else toast('ذخیره شد')}
-  catch(err){toast(err.message)}finally{btn.disabled=false;btn.textContent=label}}
-async function delSite(){if(!confirm('سایت و همه داده‌هایش حذف شود؟'))return;await api(`/api/sites/${cur.id}`,{method:'DELETE'});cur=null;show('welcome');loadSites()}
+  const btn=$('#btn-save');btn.disabled=true;
+  try{const s=await jpost(cur?`/api/sites/${cur.id}`:'/api/sites',body,cur?'PUT':'POST');
+    await loadSites();await openSite(s.id);toast('ذخیره شد');if(isNew)addCat()}
+  catch(err){toast(err.message)}finally{btn.disabled=false}}
+async function delSite(){if(!confirm(`سایت «${cur.name}» و همه بخش‌ها و داده‌هایش حذف شود؟`))return;
+  await api(`/api/sites/${cur.id}`,{method:'DELETE'});cur=null;show('welcome');loadSites()}
 
-// ----- site view -----
-async function openSite(id){cur=sites.find(s=>s.id===id);if(!cur)return;$('#d-title').textContent=cur.name;
-  $('#har-stats').innerHTML='';$('#output').classList.add('hidden');show('site-card');loadSites();
-  await Promise.all([loadReqs(),loadRuns()]).catch(e=>toast(e.message))}
+async function openSite(id,catId){cur=sites.find(s=>s.id===id);if(!cur)return;$('#d-title').textContent=cur.name;show('site-card');loadSites();
+  await loadCats(catId)}
+async function loadCats(selectId){cats=await api(`/api/sites/${cur.id}/categories`);
+  const id=selectId??cat?.id;cat=cats.find(c=>c.id===id)||cats[0]||null;
+  $('#chips').innerHTML=cats.map(c=>`<button class="chip ${c.id===cat?.id?'on':''}" onclick="selectCat(${c.id})">${esc(c.name)} <small>(${fa(c.item_count)})</small></button>`).join('')
+    +'<button class="chip" onclick="addCat()">+ بخش جدید</button>';
+  $('#btn-run-all').classList.toggle('hidden',cats.length<2);
+  renderCat()}
+function selectCat(id){q='';page=0;loadCats(id)}
+async function addCat(){const name=prompt('نام بخش جدید؟ (مثلاً پزشکان، مراکز درمانی، داروخانه‌ها)');if(!name?.trim())return;
+  const c=await jpost(`/api/sites/${cur.id}/categories`,{name:name.trim(),max_pages:1});q='';page=0;await loadCats(c.id)}
 
-async function sendHar(file){const fd=new FormData();fd.append('file',file);fd.append('api_only',true);fd.append('replace',true);
+// ----- one section -----
+function renderCat(){
+  if(!cat){$('#cat').innerHTML='<div class="empty">هنوز بخشی ندارید. «+ بخش جدید» را بزنید (مثلاً «پزشکان»).</div>';return}
+  const lr=cat.last_run;
+  $('#cat').innerHTML=`<div class="cat">
+    <div class="row" style="justify-content:space-between">
+      <h3 style="margin:0">${esc(cat.name)}</h3>
+      <div class="row">
+        <button class="pri big" id="btn-run" onclick="runCat()" ${cat.request_count?'':'disabled'}>▶ گرفتن داده این بخش</button>
+        <button onclick="$('#har-input').click()">↻ آپلود HAR</button>
+      </div>
+    </div>
+    <div id="har-stats"></div>
+    ${lr?`<p class="note" style="margin-top:10px">آخرین اجرا ${fmt(lr.started_at)}: <span class="${lr.status}">${stName[lr.status]}</span>${lr.message?' — '+esc(lr.message):''}</p>`:''}
+    ${cat.request_count?'':`<div class="empty" style="margin-top:10px"><b>HAR این بخش را آپلود کنید</b><br>
+      در سایت فقط صفحه‌های «${esc(cat.name)}» را باز کنید (مثلاً لیست و صفحه ۲ آن)، HAR بگیرید و اینجا بدهید.<br><br>
+      <button class="pri" onclick="$('#har-input').click()">انتخاب فایل HAR</button></div>`}
+    <div class="sec" id="data"></div>
+    <details class="sec"><summary>درخواست‌های این بخش (${fa(cat.request_count)})</summary><div id="reqs"></div></details>
+    <details class="sec"><summary>تنظیمات بخش</summary>
+      <div class="grid2">
+        <div><label>نام بخش</label><input id="c-name" value="${esc(cat.name)}"></div>
+        <div><label>تعداد صفحه‌ها (اگر آدرس page= دارد، تا این تعداد صفحه را می‌گیرد)</label><input id="c-pages" type="number" min="1" max="500" value="${cat.max_pages}"></div>
+      </div>
+      <div class="row" style="margin-top:8px"><button class="pri" onclick="saveCat()">ذخیره</button>
+        <button class="bad" onclick="clearItems()">پاک کردن داده‌ها</button><button class="bad" onclick="delCat()">حذف بخش</button></div>
+    </details>
+  </div>`;
+  loadReqs();loadItems()}
+async function saveCat(){await jpost(`/api/categories/${cat.id}`,{name:$('#c-name').value,max_pages:+$('#c-pages').value||1},'PUT');toast('ذخیره شد');loadCats()}
+async function delCat(){if(!confirm(`بخش «${cat.name}» و داده‌هایش حذف شود؟`))return;await api(`/api/categories/${cat.id}`,{method:'DELETE'});cat=null;loadCats();loadSites()}
+async function clearItems(){if(!confirm('همه رکوردهای ذخیره‌شده این بخش پاک شود؟'))return;await api(`/api/categories/${cat.id}/items`,{method:'DELETE'});loadCats()}
+
+async function sendHar(file){if(!cat)return;const fd=new FormData();fd.append('file',file);fd.append('replace',true);
   $('#har-stats').innerHTML='<p class="note">در حال آپلود و بررسی HAR…</p>';
-  try{const s=(await api(`/api/sites/${cur.id}/har`,{method:'POST',body:fd})).stats;
-    let h=s.kept?`<p class="note" style="border-color:var(--ok)">${fa(s.kept)} درخواست داده پیدا شد. حالا «▶ گرفتن داده» را بزنید.</p>`
-      :'<p class="note warn">در این فایل درخواستی که داده (JSON) برگرداند پیدا نشد. مطمئن شوید صفحه‌های حاوی داده را بعد از باز کردن تب Network باز کرده‌اید.</p>';
-    if(s.no_auth)h+='<p class="note warn">کوکی ورود در فایل نیست، پس احتمالاً سایت شما را لاگین‌نشده می‌بیند. در DevTools ← ⚙️ Settings ← Preferences ← Network گزینه <span dir="ltr">«Allow to generate HAR with sensitive data»</span> را روشن کنید و فایل را دوباره بگیرید.</p>';
-    $('#har-stats').innerHTML=h;await loadReqs();loadSites()}
+  try{const s=(await api(`/api/categories/${cat.id}/har`,{method:'POST',body:fd})).stats;
+    let h=s.kept?`<p class="note" style="border-color:var(--ok)">${fa(s.kept)} درخواست داده پیدا شد. حالا «▶ گرفتن داده این بخش» را بزنید.</p>`
+      :'<p class="note warn">در این فایل درخواستی که داده (JSON) برگرداند پیدا نشد. مطمئن شوید صفحه‌ها را بعد از باز کردن تب Network باز کرده‌اید.</p>';
+    if(s.no_auth)h+='<p class="note warn">کوکی ورود در فایل نیست؛ اگر داده‌ها نیاز به لاگین دارند، در DevTools ← ⚙️ Settings ← Preferences ← Network گزینه <span dir="ltr">«Allow to generate HAR with sensitive data»</span> را روشن کنید و دوباره HAR بگیرید.</p>';
+    await loadCats();$('#har-stats').innerHTML=h;loadSites()}
   catch(err){$('#har-stats').innerHTML=`<p class="note warn">آپلود ناموفق: ${esc(err.message)}</p>`}}
 
-async function loadReqs(){const rs=await api(`/api/sites/${cur.id}/requests`);const on=rs.filter(r=>r.selected).length;
-  $('#reqs-title').textContent=`درخواست‌ها (${fa(on)} از ${fa(rs.length)} فعال)`;
+async function loadReqs(){const rs=await api(`/api/categories/${cat.id}/requests`);
   $('#reqs').innerHTML=rs.length?rs.map(r=>{const u=new URL(r.url);return `<div class="req">
     <input type="checkbox" style="width:auto" ${r.selected?'checked':''} onchange="patchReq(${r.id},{selected:this.checked})" title="فعال/غیرفعال">
-    <span class="m">${esc(r.method)}</span><span class="p" title="${esc(r.url)}">${esc(u.pathname+u.search)}</span><span class="h">${esc(u.hostname)}</span>
-    <button class="bad" onclick="delReq(${r.id})" title="حذف">✕</button></div>`}).join(''):'<p class="note">درخواستی نیست؛ «آپلود HAR جدید» را بزنید.</p>'}
-async function patchReq(id,b){await api(`/api/requests/${id}`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify(b)});loadReqs();loadSites()}
-async function delReq(id){await api(`/api/requests/${id}`,{method:'DELETE'});loadReqs();loadSites()}
+    <span class="m">${esc(r.method)}</span><span class="p" title="${esc(r.url)}">${esc(dec(u.pathname+u.search))}</span><span class="h">${esc(u.hostname)}</span>
+    <button class="bad" onclick="delReq(${r.id})" title="حذف">✕</button></div>`}).join(''):'<p class="note">درخواستی نیست.</p>'}
+async function patchReq(id,b){await jpost(`/api/requests/${id}`,b,'PATCH');loadCats()}
+async function delReq(id){await api(`/api/requests/${id}`,{method:'DELETE'});loadCats()}
 
-async function runNow(){try{await api(`/api/sites/${cur.id}/run`,{method:'POST'});$('#btn-run').disabled=true;$('#btn-run').textContent='در حال اجرا…';
-  const id=cur.id;clearInterval(poll);poll=setInterval(async()=>{if(cur?.id!==id)return clearInterval(poll);
-    const rs=await loadRuns();await loadSites();
-    if(rs[0]&&rs[0].status!=='running'){clearInterval(poll);if(rs[0].output_file)showOut(rs[0].id);toast('اجرا تمام شد: '+stName[rs[0].status])}},1500)}
-  catch(err){toast(err.message)}}
-async function loadRuns(){const rs=await api(`/api/sites/${cur.id}/runs`);
-  $('#runs').innerHTML=rs.length?'<table>'+rs.slice(0,10).map(r=>`<tr><td>${fmt(r.started_at)}</td>
-    <td><span class="tag ${r.status}">${stName[r.status]}</span>${r.message?`<br><small class="failed">${esc(r.message)}</small>`:''}</td>
-    <td>${r.status==='running'?'':`${fa(r.ok_count)} موفق${r.fail_count?` · ${fa(r.fail_count)} ناموفق`:''}`}</td>
-    <td>${r.output_file?`<button onclick="showOut(${r.id})">نمایش</button>`:''}</td></tr>`).join('')+'</table>'
-    :'<p class="note">هنوز اجرا نشده.</p>';return rs}
-async function showOut(id){const o=await api(`/api/runs/${id}/output`);$('#output').classList.remove('hidden');$('#o-title').textContent=`خروجی ${fmt(o.generated_at)}`;
-  const bad=o.results.filter(x=>x.warning||x.error).length;
-  $('#o-dl').href=`/api/runs/${id}/download`;$('#o-pre').textContent=(bad?`// ${bad} درخواست خطا داشت (401/403 یعنی کوکی منقضی شده؛ HAR تازه آپلود کنید)\n`:'')+JSON.stringify(o.results.map(x=>({[x.label]:x.data??x.error,status:x.status})),null,2);
-  $('#output').scrollIntoView({behavior:'smooth',block:'nearest'})}
+async function loadItems(){const d=await api(`/api/categories/${cat.id}/items?limit=${PAGE}&offset=${page*PAGE}&q=${encodeURIComponent(q)}`);
+  const pages=Math.ceil(d.total/PAGE);
+  $('#data').innerHTML=`<div class="row" style="justify-content:space-between">
+      <h3 style="margin:0">داده‌ها: ${fa(d.total)} رکورد</h3>
+      <div class="row"><input id="q" placeholder="جستجو…" value="${esc(q)}" style="width:180px" onkeydown="if(event.key==='Enter'){q=this.value;page=0;loadItems()}">
+        <a href="/api/categories/${cat.id}/export?fmt=csv"><button>⬇ Excel</button></a><a href="/api/categories/${cat.id}/export?fmt=json"><button>⬇ JSON</button></a></div></div>
+    ${d.rows.length?`<div class="tbl" style="margin-top:8px"><table><thead><tr>${d.columns.map(c=>`<th>${esc(c)}</th>`).join('')}</tr></thead><tbody>
+      ${d.rows.map(r=>`<tr>${d.columns.map(c=>`<td title="${esc(r[c])}">${esc(r[c])}</td>`).join('')}</tr>`).join('')}</tbody></table></div>
+      ${pages>1?`<div class="row" style="margin-top:6px;justify-content:center"><button ${page?'':'disabled'} onclick="page--;loadItems()">قبلی</button>
+        <span>صفحه ${fa(page+1)} از ${fa(pages)}</span><button ${page+1<pages?'':'disabled'} onclick="page++;loadItems()">بعدی</button></div>`:''}
+      <small class="note" style="display:block;margin-top:6px">جدول فقط ۸ ستون اصلی را نشان می‌دهد؛ فایل Excel همه ستون‌ها را دارد.</small>`
+    :`<p class="note">${q?'نتیجه‌ای پیدا نشد.':'هنوز داده‌ای جمع نشده.'}</p>`}`}
+
+function watchRun(){$('#btn-run')?.setAttribute('disabled','');const id=cur.id;clearInterval(poll);
+  poll=setInterval(async()=>{if(cur?.id!==id)return clearInterval(poll);await loadSites();
+    if(!cur.running){clearInterval(poll);await loadCats();toast('اجرا تمام شد'+(cat?.last_run?': '+stName[cat.last_run.status]:''))}},2000)}
+async function runCat(){try{await api(`/api/categories/${cat.id}/run`,{method:'POST'});toast('اجرا شروع شد');watchRun()}catch(err){toast(err.message)}}
+async function runAll(){try{await api(`/api/sites/${cur.id}/run`,{method:'POST'});toast('اجرای همه بخش‌ها شروع شد');watchRun()}catch(err){toast(err.message)}}
 
 const refresh=()=>loadSites().catch(e=>{$('#sites').innerHTML=`<p class="note warn">خطا در دریافت لیست سایت‌ها: ${esc(e.message)}</p>`});
 refresh();setInterval(refresh,15000);

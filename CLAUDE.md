@@ -52,6 +52,12 @@ deploy/wheels/     offline wheels (py3.10–3.13, x86_64) for servers without Py
 - Owner asked for a **simple** panel: no tabs; new site = HAR file + name + contract number (domain auto = base domain of the HAR's page; advanced settings folded in <details>); site view = requests list + "گرفتن داده" + results. Keep it simple.
 - HAR import drops trackers/analytics/ads (`har.is_tracker`: host list, `sentry.`-style prefixes, path segments like collect/envelope) and only keeps requests that returned JSON (not 204/4xx beacons).
 
+## Sections (categories) and stored data
+- A site has **sections** (`categories`: e.g. doctors / clinics / pharmacies). HAR upload, requests, runs and data are per section; `POST /api/sites/{id}/run` (and the scheduler) runs every section in turn.
+- After each response, `extract.find_records` takes the largest list of objects in the JSON as the records; each is flattened (`a.b` keys) and upserted into `items` by id/slug/code (else content hash). Export: `/api/categories/{id}/export?fmt=csv|json` (CSV has a BOM for Excel).
+- `categories.max_pages`: if a request URL has `page=`-style param, pages are fetched until an empty or repeated page.
+- Old databases: requests without a section are moved into a section named «عمومی» on startup.
+
 ## Likely production issues to check first
 1. **Arvan CDN caching** API responses → site list doesn't update after save. Fixed in code with `Cache-Control: no-store` middleware (needs deploy + purge CDN cache). Also consider a CDN rule to bypass cache for the whole host.
 2. **CDN upload limit / timeout** on large HAR files → upload fails (413/504). Check Arvan CDN settings, or bypass CDN (DNS-only) for this host.

@@ -1,15 +1,17 @@
 """FastAPI app: panel + API + scheduler."""
+import csv
+import io
 import json
 import secrets
 import threading
 from contextlib import asynccontextmanager
 from pathlib import Path
+from urllib.parse import quote
 
 from apscheduler.schedulers.background import BackgroundScheduler
 from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
-from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from . import db, har, scraper
@@ -21,13 +23,13 @@ _running: set[int] = set()
 _running_lock = threading.Lock()
 
 
-def _job(site_id: int, trigger: str):
+def _job(site_id: int, trigger: str, category_id: int | None = None):
     with _running_lock:
         if site_id in _running:
             return
         _running.add(site_id)
     try:
-        scraper.run_site(site_id, trigger)
+        scraper.run_site(site_id, trigger, category_id)
     finally:
         with _running_lock:
             _running.discard(site_id)
@@ -89,7 +91,8 @@ class SiteIn(BaseModel):
 
 
 def _clean_domains(ds):
-    out = [d.strip().lower().removeprefix("https://").removeprefix("http://").split("/")[0] for d in ds]
+    out = [d.strip().lower().removeprefix("https://").removeprefix("http://").split("/")[0].split(":")[0]
+           .removeprefix("www.") for d in ds]
     return [d for d in out if d]
 
 
@@ -125,7 +128,8 @@ def list_sites():
     with db.conn() as c:
         sites = [_public(db.row(r)) for r in c.execute("SELECT * FROM sites ORDER BY id DESC")]
         for s in sites:
-            s["request_count"] = c.execute("SELECT COUNT(*) FROM requests WHERE site_id=? AND selected=1", (s["id"],)).fetchone()[0]
+            s["category_count"] = c.execute("SELECT COUNT(*) FROM categories WHERE site_id=?", (s["id"],)).fetchone()[0]
+            s["item_count"] = c.execute("SELECT COUNT(*) FROM items JOIN categories ON categories.id=items.category_id WHERE site_id=?", (s["id"],)).fetchone()[0]
             last = c.execute("SELECT * FROM runs WHERE site_id=? ORDER BY id DESC LIMIT 1", (s["id"],)).fetchone()
             s["last_run"] = dict(last) if last else None
             job = scheduler.get_job(f"site_{s['id']}")
@@ -176,32 +180,78 @@ def delete_site(site_id: int):
     return {"ok": True}
 
 
-# ---------- HAR & requests ----------
-@app.post("/api/sites/{site_id}/har", dependencies=[Depends(auth)])
-async def upload_har(site_id: int, file: UploadFile = File(...), api_only: bool = Form(True), replace: bool = Form(True)):
+# ---------- Sections (categories) ----------
+class CategoryIn(BaseModel):
+    name: str = Field(min_length=1)
+    max_pages: int = Field(1, ge=1, le=500)
+
+
+def _get_cat(c, cid):
+    cat = db.row(c.execute("SELECT * FROM categories WHERE id=?", (cid,)).fetchone())
+    if not cat:
+        raise HTTPException(404, "بخش پیدا نشد")
+    return cat
+
+
+@app.get("/api/sites/{site_id}/categories", dependencies=[Depends(auth)])
+def list_categories(site_id: int):
+    with db.conn() as c:
+        cats = [db.row(r) for r in c.execute("SELECT * FROM categories WHERE site_id=? ORDER BY id", (site_id,))]
+        for cat in cats:
+            cat["request_count"] = c.execute("SELECT COUNT(*) FROM requests WHERE category_id=? AND selected=1", (cat["id"],)).fetchone()[0]
+            cat["item_count"] = c.execute("SELECT COUNT(*) FROM items WHERE category_id=?", (cat["id"],)).fetchone()[0]
+            last = c.execute("SELECT * FROM runs WHERE category_id=? ORDER BY id DESC LIMIT 1", (cat["id"],)).fetchone()
+            cat["last_run"] = dict(last) if last else None
+    return cats
+
+
+@app.post("/api/sites/{site_id}/categories", dependencies=[Depends(auth)])
+def create_category(site_id: int, body: CategoryIn):
+    with db.conn() as c:
+        _get_site(c, site_id)
+        cid = c.execute("INSERT INTO categories(site_id, name, max_pages, created_at) VALUES (?,?,?,?)",
+                        (site_id, body.name.strip(), body.max_pages, db.now())).lastrowid
+        return _get_cat(c, cid)
+
+
+@app.put("/api/categories/{cid}", dependencies=[Depends(auth)])
+def update_category(cid: int, body: CategoryIn):
+    with db.conn() as c:
+        _get_cat(c, cid)
+        c.execute("UPDATE categories SET name=?, max_pages=? WHERE id=?", (body.name.strip(), body.max_pages, cid))
+        return _get_cat(c, cid)
+
+
+@app.delete("/api/categories/{cid}", dependencies=[Depends(auth)])
+def delete_category(cid: int):
+    with db.conn() as c:
+        c.execute("DELETE FROM categories WHERE id=?", (cid,))
+    return {"ok": True}
+
+
+@app.post("/api/categories/{cid}/har", dependencies=[Depends(auth)])
+async def upload_har(cid: int, file: UploadFile = File(...), replace: bool = Form(True)):
     raw = await file.read()
     try:
         data = har.load(raw)
     except har.HarError as e:
         raise HTTPException(400, str(e))
     with db.conn() as c:
-        site = _get_site(c, site_id)
-        templates, stats = har.extract(data, site["allowed_domains"], api_only=api_only)
+        cat = _get_cat(c, cid)
+        site = _get_site(c, cat["site_id"])
+        templates, stats = har.extract(data, site["allowed_domains"], api_only=True)
         if replace:
-            c.execute("DELETE FROM requests WHERE site_id=?", (site_id,))
+            c.execute("DELETE FROM requests WHERE category_id=?", (cid,))
         for t in templates:
-            c.execute("INSERT INTO requests(site_id,label,method,url,headers,body,selected,created_at) VALUES (?,?,?,?,?,?,1,?)",
-                      (site_id, t["label"], t["method"], t["url"], json.dumps(t["headers"], ensure_ascii=False), t["body"], db.now()))
+            c.execute("INSERT INTO requests(site_id,category_id,label,method,url,headers,body,selected,created_at) VALUES (?,?,?,?,?,?,?,1,?)",
+                      (site["id"], cid, t["label"], t["method"], t["url"], json.dumps(t["headers"], ensure_ascii=False), t["body"], db.now()))
     return {"stats": stats}
 
 
-@app.get("/api/sites/{site_id}/requests", dependencies=[Depends(auth)])
-def list_requests(site_id: int):
+@app.get("/api/categories/{cid}/requests", dependencies=[Depends(auth)])
+def list_requests(cid: int):
     with db.conn() as c:
-        rows = [db.row(r) for r in c.execute("SELECT * FROM requests WHERE site_id=? ORDER BY id", (site_id,))]
-    for r in rows:  # never send secrets back to the browser in full
-        r["headers"] = {k: (v[:12] + "…" if k.lower() in ("cookie", "authorization") and len(v) > 12 else v)
-                        for k, v in r["headers"].items()}
+        rows = [db.row(r) for r in c.execute("SELECT id, label, method, url, selected FROM requests WHERE category_id=? ORDER BY id", (cid,))]
     return rows
 
 
@@ -227,21 +277,86 @@ def delete_request(req_id: int):
     return {"ok": True}
 
 
-# ---------- Runs ----------
-@app.post("/api/sites/{site_id}/run", dependencies=[Depends(auth)])
-def run_now(site_id: int):
+# ---------- Collected data ----------
+def _columns(rows: list[dict], limit: int | None = None) -> list[str]:
+    freq: dict[str, int] = {}
+    for r in rows:
+        for k, v in r.items():
+            if v not in (None, ""):
+                freq[k] = freq.get(k, 0) + 1
+    cols = sorted(freq, key=lambda k: -freq[k])  # stable: most common first, original order on ties
+    return cols[:limit] if limit else cols
+
+
+@app.get("/api/categories/{cid}/items", dependencies=[Depends(auth)])
+def list_items(cid: int, q: str = "", limit: int = 50, offset: int = 0):
     with db.conn() as c:
-        _get_site(c, site_id)
+        _get_cat(c, cid)
+        where, args = "category_id=?", [cid]
+        if q:
+            where += " AND data LIKE ?"
+            args.append(f"%{q}%")
+        total = c.execute(f"SELECT COUNT(*) FROM items WHERE {where}", args).fetchone()[0]
+        rows = [json.loads(r["data"]) for r in c.execute(
+            f"SELECT data FROM items WHERE {where} ORDER BY id LIMIT ? OFFSET ?", args + [min(limit, 500), offset])]
+    return {"total": total, "columns": _columns(rows, 8), "rows": rows}
+
+
+@app.delete("/api/categories/{cid}/items", dependencies=[Depends(auth)])
+def clear_items(cid: int):
+    with db.conn() as c:
+        c.execute("DELETE FROM items WHERE category_id=?", (cid,))
+    return {"ok": True}
+
+
+@app.get("/api/categories/{cid}/export", dependencies=[Depends(auth)])
+def export_items(cid: int, fmt: str = "csv"):
+    with db.conn() as c:
+        cat = _get_cat(c, cid)
+        site = _get_site(c, cat["site_id"])
+        items = [dict(json.loads(r["data"]), _first_seen=r["first_seen"], _last_seen=r["last_seen"])
+                 for r in c.execute("SELECT data, first_seen, last_seen FROM items WHERE category_id=? ORDER BY id", (cid,))]
+    name = f"{site['name']}-{cat['name']}"
+    if fmt == "json":
+        body, media, ext = json.dumps(items, ensure_ascii=False, indent=2).encode(), "application/json", "json"
+    else:
+        buf = io.StringIO()
+        cols = [k for k in _columns(items) if not k.startswith("_")] + ["_first_seen", "_last_seen"]
+        w = csv.DictWriter(buf, fieldnames=cols, extrasaction="ignore")
+        w.writeheader()
+        w.writerows(items)
+        # BOM so Excel opens Persian text correctly
+        body, media, ext = ("\ufeff" + buf.getvalue()).encode("utf-8"), "text/csv; charset=utf-8", "csv"
+    return Response(body, media_type=media, headers={
+        "Content-Disposition": f"attachment; filename=export.{ext}; filename*=UTF-8''{quote(name)}.{ext}"})
+
+
+# ---------- Runs ----------
+def _start(site_id: int, category_id: int | None):
     if site_id in _running:
-        raise HTTPException(409, "این سایت در حال اجراست")
-    threading.Thread(target=_job, args=(site_id, "manual"), daemon=True).start()
+        raise HTTPException(409, "این سایت در حال اجراست؛ کمی صبر کنید")
+    threading.Thread(target=_job, args=(site_id, "manual", category_id), daemon=True).start()
     return {"started": True}
 
 
-@app.get("/api/sites/{site_id}/runs", dependencies=[Depends(auth)])
-def list_runs(site_id: int):
+@app.post("/api/sites/{site_id}/run", dependencies=[Depends(auth)])
+def run_site_now(site_id: int):
     with db.conn() as c:
-        return [dict(r) for r in c.execute("SELECT * FROM runs WHERE site_id=? ORDER BY id DESC LIMIT 50", (site_id,))]
+        _get_site(c, site_id)
+    return _start(site_id, None)
+
+
+@app.post("/api/categories/{cid}/run", dependencies=[Depends(auth)])
+def run_category_now(cid: int):
+    with db.conn() as c:
+        cat = _get_cat(c, cid)
+    return _start(cat["site_id"], cid)
+
+
+@app.get("/api/categories/{cid}/runs", dependencies=[Depends(auth)])
+def list_runs(cid: int):
+    with db.conn() as c:
+        return [dict(r) for r in c.execute("SELECT * FROM runs WHERE category_id=? ORDER BY id DESC LIMIT 20", (cid,))]
 
 
 def _run_file(run_id: int) -> Path:
