@@ -14,7 +14,7 @@ from fastapi.responses import FileResponse, Response
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from pydantic import BaseModel, Field
 
-from . import db, har, scraper
+from . import db, har, scraper, visual
 from .recorder import RecorderError, recorder
 from .config import ADMIN_PASS, ADMIN_USER, DATA_DIR, FEED_KEY, OUTPUT_DIR
 
@@ -186,6 +186,16 @@ def delete_site(site_id: int):
 class CategoryIn(BaseModel):
     name: str = Field(min_length=1)
     max_pages: int = Field(200, ge=1, le=1000)
+    mode: str | None = None
+
+
+def _cat_out(cat: dict) -> dict:
+    cat = dict(cat)
+    try:
+        cat["config"] = json.loads(cat.get("config") or "{}")
+    except ValueError:
+        cat["config"] = {}
+    return cat
 
 
 def _get_cat(c, cid):
@@ -198,7 +208,7 @@ def _get_cat(c, cid):
 @app.get("/api/sites/{site_id}/categories", dependencies=[Depends(auth)])
 def list_categories(site_id: int):
     with db.conn() as c:
-        cats = [db.row(r) for r in c.execute("SELECT * FROM categories WHERE site_id=? ORDER BY id", (site_id,))]
+        cats = [_cat_out(db.row(r)) for r in c.execute("SELECT * FROM categories WHERE site_id=? ORDER BY id", (site_id,))]
         for cat in cats:
             cat["request_count"] = c.execute("SELECT COUNT(*) FROM requests WHERE category_id=? AND selected=1", (cat["id"],)).fetchone()[0]
             cat["item_count"] = c.execute("SELECT COUNT(*) FROM items WHERE category_id=?", (cat["id"],)).fetchone()[0]
@@ -211,9 +221,9 @@ def list_categories(site_id: int):
 def create_category(site_id: int, body: CategoryIn):
     with db.conn() as c:
         _get_site(c, site_id)
-        cid = c.execute("INSERT INTO categories(site_id, name, max_pages, created_at) VALUES (?,?,?,?)",
-                        (site_id, body.name.strip(), body.max_pages, db.now())).lastrowid
-        return _get_cat(c, cid)
+        cid = c.execute("INSERT INTO categories(site_id, name, max_pages, mode, created_at) VALUES (?,?,?,?,?)",
+                        (site_id, body.name.strip(), body.max_pages, body.mode or "visual", db.now())).lastrowid
+        return _cat_out(_get_cat(c, cid))
 
 
 @app.put("/api/categories/{cid}", dependencies=[Depends(auth)])
@@ -221,7 +231,36 @@ def update_category(cid: int, body: CategoryIn):
     with db.conn() as c:
         _get_cat(c, cid)
         c.execute("UPDATE categories SET name=?, max_pages=? WHERE id=?", (body.name.strip(), body.max_pages, cid))
-        return _get_cat(c, cid)
+        if body.mode in ("visual", "api"):
+            c.execute("UPDATE categories SET mode=? WHERE id=?", (body.mode, cid))
+        return _cat_out(_get_cat(c, cid))
+
+
+class VisualIn(BaseModel):
+    list_url: str = ""
+    max_pages: int = Field(200, ge=1, le=2000)
+    item_selector: str = ""
+    fields: list[dict] = []
+    detail_link: str | None = None
+    detail_click: str | None = None
+
+
+@app.put("/api/categories/{cid}/visual", dependencies=[Depends(auth)])
+def save_visual(cid: int, body: VisualIn):
+    """Settings of a point-and-click section: list address and the picked fields."""
+    with db.conn() as c:
+        cat = _get_cat(c, cid)
+        site = _get_site(c, cat["site_id"])
+        url = body.list_url.strip()
+        if url and not (url.startswith(("http://", "https://")) and har.host_allowed(url.replace("{page}", "1"), site["allowed_domains"])):
+            raise HTTPException(400, "آدرس لیست باید روی دامنه همین سایت باشد (با http/https)")
+        fields = [{k: f.get(k) for k in ("name", "page", "attr", "rel", "rel_tags", "selector", "count", "sample")}
+                  for f in body.fields if str(f.get("name") or "").strip()]
+        cfg = {"list_url": url, "max_pages": body.max_pages, "item_selector": body.item_selector, "fields": fields,
+               "detail_link": body.detail_link or None, "detail_click": body.detail_click or None}
+        # the picked fields are the output, so no separate field choice
+        c.execute("UPDATE categories SET config=?, mode='visual', fields='[]' WHERE id=?", (json.dumps(cfg, ensure_ascii=False), cid))
+        return _cat_out(_get_cat(c, cid))
 
 
 @app.delete("/api/categories/{cid}", dependencies=[Depends(auth)])
@@ -264,6 +303,15 @@ async def upload_har(cid: int, file: UploadFile = File(...), replace: bool = For
 # ---------- Recording browser (log in and click on the site from the panel) ----------
 class RecStart(BaseModel):
     url: str = ""
+    record_har: bool = True
+
+
+class RecPick(BaseModel):
+    x: float
+    y: float
+    where: str = "list"            # list | detail
+    item_selector: str | None = None
+    attr: str = "text"             # text | href | src | click
 
 
 class RecStop(BaseModel):
@@ -281,7 +329,7 @@ async def recorder_start(cid: int, body: RecStart):
         cat = _get_cat(c, cid)
         site = _get_site(c, cat["site_id"])
     try:
-        await recorder.start(cid, body.url.strip() or f"https://{site['allowed_domains'][0]}/")
+        await recorder.start(cid, body.url.strip() or f"https://{site['allowed_domains'][0]}/", body.record_har)
     except RecorderError as e:
         raise HTTPException(400, str(e))
     except Exception as e:  # page load timeout etc.: the browser is open anyway
@@ -309,13 +357,23 @@ async def recorder_input(ev: dict):
     return {"ok": True, "url": recorder.page.url if recorder.page else None}
 
 
+@app.post("/api/recorder/pick", dependencies=[Depends(auth)])
+async def recorder_pick(body: RecPick):
+    try:
+        return await recorder.pick(body.x, body.y, body.where, body.item_selector, body.attr)
+    except RecorderError as e:
+        raise HTTPException(409, str(e))
+    except Exception as e:
+        raise HTTPException(400, f"انتخاب ناموفق بود: {e}")
+
+
 @app.post("/api/recorder/stop", dependencies=[Depends(auth)])
 async def recorder_stop(body: RecStop):
     cid, raw = await recorder.stop(save=body.save)
     if not body.save or cid is None:
         return {"saved": False}
-    if not raw:
-        raise HTTPException(500, "فایل ضبط ساخته نشد")
+    if not raw:  # point-and-click session: only the login was kept
+        return {"saved": True, "category_id": cid, "stats": None}
     return {"saved": True, "category_id": cid, "stats": _import_har(cid, raw, replace=True)}
 
 
@@ -390,7 +448,11 @@ def _columns(rows: list[dict], limit: int | None = None) -> list[str]:
 
 
 def _fields(cat: dict) -> list[dict]:
+    """Output fields: chosen ones for API sections, the picked ones (in their order) for visual sections."""
     try:
+        if cat.get("mode") == "visual":
+            cfg = json.loads(cat.get("config") or "{}")
+            return [{"key": f["name"], "label": ""} for f in cfg.get("fields", []) if f.get("name")]
         return [f for f in json.loads(cat.get("fields") or "[]") if f.get("key")]
     except ValueError:
         return []
@@ -454,7 +516,7 @@ def list_items(cid: int, q: str = "", source: str = "", limit: int = 50, offset:
     fields = _fields(cat)
     if fields:
         rows = [_project(r, fields) for r in rows]
-        return {"total": total, "groups": groups, "columns": list(rows[0]) if rows else [], "rows": rows, "chosen": True}
+        return {"total": total, "groups": groups, "columns": [f.get("label") or f["key"] for f in fields], "rows": rows, "chosen": True}
     return {"total": total, "groups": groups, "columns": _columns(rows, 8), "rows": rows, "chosen": False}
 
 

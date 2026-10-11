@@ -6,6 +6,7 @@ Only one recording runs at a time; it is closed automatically after IDLE_SECONDS
 import asyncio
 import time
 
+from . import visual
 from .config import DATA_DIR
 
 WIDTH, HEIGHT = 1280, 800
@@ -35,7 +36,7 @@ class Recorder:
         return {"active": self.active, "category_id": self.category_id,
                 "url": self.page.url if self.page else None, "width": WIDTH, "height": HEIGHT}
 
-    async def start(self, category_id: int, url: str):
+    async def start(self, category_id: int, url: str, record_har: bool = True):
         try:
             from playwright.async_api import async_playwright
         except ImportError:
@@ -49,9 +50,15 @@ class Recorder:
             try:
                 self.pw = await async_playwright().start()
                 self.browser = await self.pw.chromium.launch(args=["--disable-dev-shm-usage", "--lang=fa-IR"])
-                self.context = await self.browser.new_context(
-                    viewport={"width": WIDTH, "height": HEIGHT}, locale="fa-IR",
-                    record_har_path=str(self.har_path), record_har_content="embed")
+                sess = visual.session_file(category_id)
+                opts = {"viewport": {"width": WIDTH, "height": HEIGHT}, "locale": "fa-IR",
+                        # reuse the login saved by an earlier session of this section
+                        "storage_state": str(sess) if sess.exists() else None}
+                if record_har:
+                    opts.update(record_har_path=str(self.har_path), record_har_content="embed")
+                else:
+                    self.har_path = None
+                self.context = await self.browser.new_context(**opts)
                 self.page = await self.context.new_page()
                 # A link that opens a new tab: follow it in the single visible tab instead
                 self.context.on("page", self._adopt_page)
@@ -101,10 +108,22 @@ class Recorder:
         elif kind == "reload":
             await page.reload(wait_until="domcontentloaded")
 
+    async def pick(self, x: float, y: float, where: str, item_selector: str | None, attr: str) -> dict:
+        """What is under (x, y), with selectors to find it again (see visual.PICK_JS)."""
+        page = self._page()
+        return await page.evaluate(visual.PICK_JS, [x, y, where, item_selector or None, attr])
+
     async def stop(self, save: bool = True) -> tuple[int | None, bytes | None]:
         """Close the browser; returns (category_id, HAR bytes) when saving."""
         async with self.lock:
             cid, path = self.category_id, self.har_path
+            if save and self.context and cid is not None:
+                # keep the login (cookies) for collection runs and the next session
+                try:
+                    visual.SESSIONS.mkdir(parents=True, exist_ok=True)
+                    await self.context.storage_state(path=str(visual.session_file(cid)))
+                except Exception:
+                    pass
             await self._close(save)
             if save and path and path.exists():
                 data = path.read_bytes()

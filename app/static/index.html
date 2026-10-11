@@ -142,7 +142,8 @@ details{margin:10px 0}summary{cursor:pointer;color:var(--mute);font-size:13px}
     <input id="rec-url" dir="ltr" style="flex:1;min-width:200px" onkeydown="if(event.key==='Enter')recIn({type:'goto',url:this.value})">
     <button class="pri" onclick="recStop(true)">✓ پایان و ذخیره</button><button class="bad" onclick="recStop(false)">لغو</button>
   </div>
-  <p class="note" style="margin:0 0 8px">روی تصویر کلیک کنید و تایپ کنید (اول روی کادر متن در سایت کلیک کنید). <b>۱.</b> لاگین کنید <b>۲.</b> صفحه‌های این بخش را باز کنید و صفحه بعد را بزنید <b>۳.</b> روی یک مورد کلیک کنید و اطلاعات کامل/شماره را باز کنید <b>۴.</b> «پایان و ذخیره». <span id="rec-st"></span></p>
+  <p class="note" id="rec-help" style="margin:0 0 8px">روی تصویر کلیک کنید و تایپ کنید (اول روی کادر متن در سایت کلیک کنید). <b>۱.</b> لاگین کنید <b>۲.</b> صفحه‌های این بخش را باز کنید و صفحه بعد را بزنید <b>۳.</b> روی یک مورد کلیک کنید و اطلاعات کامل/شماره را باز کنید <b>۴.</b> «پایان و ذخیره». <span id="rec-st"></span></p>
+  <div id="rec-pick" class="chips" style="margin:0 0 8px"></div>
   <img id="rec-img" tabindex="0" alt="">
   <div class="row" style="margin-top:8px"><input id="rec-text" placeholder="متن طولانی یا فارسی را اینجا بنویسید و «ارسال» بزنید (مثلاً شماره موبایل یا کد)" style="flex:1" onkeydown="if(event.key==='Enter'){recSendText();event.preventDefault()}">
     <button onclick="recSendText()">ارسال متن</button><button onclick="recIn({type:'key',key:'Enter'})">Enter ↵</button></div>
@@ -224,40 +225,112 @@ async function addCat(){const name=prompt('نام بخش جدید؟ (مثلاً 
 function lastRunText(lr){return lr?`آخرین اجرا ${fmt(lr.started_at)}: <span class="${lr.status}">${stName[lr.status]}</span>${lr.message?' — '+esc(lr.message):''}`:''}
 function renderCat(){
   if(!cat){$('#cat').innerHTML='<div class="empty">هنوز بخشی ندارید. «+ بخش جدید» را بزنید (مثلاً «پزشکان»).</div>';return}
-  const lr=cat.last_run;
+  const lr=cat.last_run,vis=cat.mode==='visual';
+  if(vis)vLoad();
+  const ready=vis?vReady():cat.request_count;
   $('#cat').innerHTML=`<div class="cat">
     <div class="row" style="justify-content:space-between">
       <h3 style="margin:0">${esc(cat.name)}</h3>
       <div class="row">
-        <button class="pri big" id="btn-run" onclick="runCat()" ${cat.request_count?'':'disabled'}>▶ گرفتن داده این بخش</button>
-        <button onclick="recStart()">🎥 ضبط با مرورگر</button>
-        <button onclick="$('#har-input').click()">↻ آپلود HAR</button>
+        <button class="pri big" id="btn-run" onclick="runCat()" ${ready?'':'disabled'}>▶ گرفتن داده این بخش</button>
+        ${vis?'':`<button onclick="recStart()">🎥 ضبط با مرورگر</button><button onclick="$('#har-input').click()">↻ آپلود HAR</button>`}
       </div>
     </div>
-    <div id="har-stats"></div>
-    <div class="result"><div><div class="num" id="cnt">${fa(cat.item_count)}</div><div>رکورد جمع شده در «${esc(cat.name)}»</div></div>
+    <div class="result"><div><div class="num" id="cnt">${fa(cat.item_count)}</div><div>مورد جمع شده در «${esc(cat.name)}»</div></div>
       <div class="row"><a href="/api/categories/${cat.id}/export?fmt=json"><button class="pri big" ${cat.item_count?'':'disabled'}>⬇ دانلود JSON</button></a>
         <a href="/api/categories/${cat.id}/export?fmt=csv"><button ${cat.item_count?'':'disabled'}>⬇ Excel</button></a></div></div>
     <p class="note" id="lastrun" style="margin-top:10px">${lastRunText(lr)}</p>
-    ${cat.request_count?'':`<div class="empty" style="margin-top:10px"><b>به این بخش یاد بدهید چه داده‌ای بگیرد</b><br>
-      «ضبط با مرورگر» را بزنید: سایت داخل همین صفحه باز می‌شود. لاگین کنید، صفحه‌های «${esc(cat.name)}» را باز کنید و روی یک مورد کلیک کنید (مثلاً پروفایل و نمایش شماره)، بعد «پایان و ذخیره».<br><br>
-      <button class="pri big" onclick="recStart()">🎥 ضبط با مرورگر</button> &nbsp; <button onclick="$('#har-input').click()">یا آپلود فایل HAR</button></div>`}
+    ${vis?`<div id="vis"></div>`:apiPanel()}
     <div class="sec" id="data"></div>
-    <details class="sec" id="reqs-box"><summary>درخواست‌ها و فیلترها (${fa(cat.request_count)})</summary>
-      <p class="note">«لیست» همه صفحه‌هایش گرفته می‌شود. «جزئیات» (مثل پروفایل یا شماره تماس) برای <b>تک‌تک</b> رکوردها تکرار و به همان ردیف اضافه می‌شود.
-      برای عوض کردن تخصص یا شهر، روی ✎ بزنید و همان قسمت آدرس را عوض کنید (مثلاً <span dir="ltr">geo-tehran</span> ← <span dir="ltr">geo-shiraz</span>)؛ با ⧉ یک کپی بسازید تا چند شهر/تخصص با هم گرفته شود.</p>
-      <div id="reqs"></div></details>
     <details class="sec" ontoggle="if(this.open)showFeed()"><summary>اتصال به سایت خودتان (API)</summary><div id="feed"></div></details>
     <details class="sec"><summary>تنظیمات بخش</summary>
       <div class="grid2">
         <div><label>نام بخش</label><input id="c-name" value="${esc(cat.name)}"></div>
-        <div><label>حداکثر صفحه برای هر درخواست (صفحه‌ها خودکار تا تمام شدن داده گرفته می‌شوند)</label><input id="c-pages" type="number" min="1" max="1000" value="${cat.max_pages}"></div>
+        <div><label>روش جمع‌آوری</label><select id="c-mode"><option value="visual" ${vis?'selected':''}>انتخاب با کلیک روی صفحه (پیشنهادی)</option><option value="api" ${vis?'':'selected'}>پیشرفته: از روی درخواست‌های API (HAR)</option></select></div>
       </div>
       <div class="row" style="margin-top:8px"><button class="pri" onclick="saveCat()">ذخیره</button>
         <button class="bad" onclick="clearItems()">پاک کردن داده‌ها</button><button class="bad" onclick="delCat()">حذف بخش</button></div>
     </details>
   </div>`;
-  loadReqs();loadItems()}
+  if(vis)vRender();else loadReqs();
+  loadItems()}
+function apiPanel(){return `<div id="har-stats"></div>
+    ${cat.request_count?'':`<div class="empty" style="margin-top:10px"><b>به این بخش یاد بدهید چه داده‌ای بگیرد</b><br>
+      «ضبط با مرورگر» را بزنید: سایت داخل همین صفحه باز می‌شود. لاگین کنید، صفحه‌های «${esc(cat.name)}» را باز کنید و روی یک مورد کلیک کنید، بعد «پایان و ذخیره».<br><br>
+      <button class="pri big" onclick="recStart()">🎥 ضبط با مرورگر</button> &nbsp; <button onclick="$('#har-input').click()">یا آپلود فایل HAR</button></div>`}
+    <details class="sec" id="reqs-box"><summary>درخواست‌ها و فیلترها (${fa(cat.request_count)})</summary>
+      <p class="note">«لیست» همه صفحه‌هایش گرفته می‌شود. «جزئیات» برای <b>تک‌تک</b> رکوردها تکرار و به همان ردیف اضافه می‌شود. با ✎ آدرس را عوض کنید و با ⧉ کپی بسازید.</p>
+      <div id="reqs"></div></details>`}
+
+// ----- point-and-click section -----
+let vcfg=null,vArm=null;
+const WHERE={list:'صفحه لیست',detail:'صفحه جزئیات هر مورد'},ATTR={text:'متن',href:'لینک',src:'عکس'};
+function vLoad(){const c=cat.config||{};const fields=(c.fields||[]).map(f=>({...f}));
+  const li=fields.findIndex(f=>f.name===c.detail_link);
+  vcfg={list_url:c.list_url||'',max_pages:c.max_pages||200,item_selector:c.item_selector||'',
+    link:li>=0?fields.splice(li,1)[0]:null,click:c.detail_click?{selector:c.detail_click,sample:''}:null,
+    fields:fields.length?fields:[{name:'نام',page:'list',attr:'text'}]}}
+function vReady(){return vcfg&&vcfg.list_url&&vcfg.item_selector&&vcfg.fields.some(f=>f.page==='list'&&f.rel)}
+function vStatus(f,where){const ok=where==='list'?f.rel:f.selector;
+  return ok?`<span class="ok">✓</span> <small title="${esc(f.sample)}">${f.count?esc(f.count)+' · ':''}${esc((f.sample||'').slice(0,40))}</small>`:'<small class="failed">هنوز انتخاب نشده</small>'}
+function vRender(){if(!$('#vis'))return;const needDetail=vcfg.fields.some(f=>f.page==='detail');
+  $('#vis').innerHTML=`
+  <div class="step"><b class="n">۱</b>آدرس صفحه لیست
+    <div class="row" style="margin-top:6px"><input id="v-url" dir="ltr" style="flex:1;min-width:260px" value="${esc(vcfg.list_url)}" placeholder="https://drdr.ir/specialties/obstetrics-and-gynecology/geo-tehran?page={page}" oninput="vcfg.list_url=this.value.trim()">
+      <label style="margin:0">حداکثر صفحه</label><input type="number" min="1" max="2000" style="width:90px" value="${vcfg.max_pages}" oninput="vcfg.max_pages=+this.value||200"></div>
+    <small class="note" style="display:block;margin-top:6px">صفحه لیست را در مرورگر خودتان باز کنید، به صفحه ۲ بروید و آدرس را کپی کنید؛ بعد جای عدد ۲ بنویسید <code dir="ltr">{page}</code>. سامانه صفحه ۱، ۲، ۳… را تا وقتی مورد دارد می‌گیرد.</small>
+  </div>
+  <div class="step"><b class="n">۲</b>چه اطلاعاتی می‌خواهید؟ (اسم بگذارید و بگویید کجاست)
+    <div style="margin-top:6px">${vcfg.fields.map((f,i)=>`<div class="frow" style="grid-template-columns:minmax(0,1fr) 150px 90px minmax(0,1.3fr) 30px">
+      <input type="text" value="${esc(f.name)}" placeholder="مثلاً نام، تخصص، تلفن" oninput="vcfg.fields[${i}].name=this.value">
+      <select onchange="vcfg.fields[${i}].page=this.value;vRender()">${Object.entries(WHERE).map(([k,v])=>`<option value="${k}" ${f.page===k?'selected':''}>${v}</option>`).join('')}</select>
+      <select onchange="vcfg.fields[${i}].attr=this.value">${Object.entries(ATTR).map(([k,v])=>`<option value="${k}" ${f.attr===k?'selected':''}>${v}</option>`).join('')}</select>
+      <span>${vStatus(f,f.page)}</span><button class="bad" onclick="vcfg.fields.splice(${i},1);vRender()" title="حذف">✕</button></div>`).join('')}
+    </div>
+    <button style="margin-top:6px" onclick="vcfg.fields.push({name:'',page:'list',attr:'text'});vRender()">+ اطلاعات جدید</button>
+    ${needDetail?`<div class="frow" style="grid-template-columns:minmax(0,1fr) minmax(0,1.3fr);margin-top:8px"><b>🔗 لینک صفحه جزئیات هر مورد</b><span>${vcfg.link?vStatus(vcfg.link,'list'):'<small class="failed">برای «صفحه جزئیات» لازم است: در صفحه لیست روی اسم/عکس یک مورد که به صفحه‌اش می‌رود انتخاب کنید</small>'}</span></div>
+      <div class="frow" style="grid-template-columns:minmax(0,1fr) minmax(0,1.3fr) 30px"><b>🔘 دکمه قبل از خواندن جزئیات <small>(اختیاری؛ مثل «نمایش شماره»)</small></b><span>${vcfg.click?'<span class="ok">✓</span> انتخاب شد':'<small>ندارد</small>'}</span>${vcfg.click?'<button class="bad" onclick="vcfg.click=null;vRender()">✕</button>':''}</div>`:''}
+  </div>
+  <div class="step"><b class="n">۳</b>روی صفحه نشان بدهید هر اطلاعات کجاست
+    <div class="row" style="margin-top:6px"><button class="pri big" onclick="vOpen()">🎯 باز کردن سایت و انتخاب روی صفحه</button><button onclick="vSave()">ذخیره تنظیمات</button></div>
+    <small class="note" style="display:block;margin-top:6px">سایت داخل همین صفحه باز می‌شود. اگر لازم است اول لاگین کنید. بعد بالای پنجره روی اسم هر اطلاعات بزنید و روی همان چیز در صفحه کلیک کنید (مثلاً روی اسم اولین پزشک). برای اطلاعات «صفحه جزئیات»، یک مورد را باز کنید و آنجا انتخاب کنید.</small>
+  </div>`}
+function vPayload(){const fields=vcfg.fields.filter(f=>f.name.trim()).map(f=>({...f,name:f.name.trim()}));
+  if(vcfg.link&&fields.some(f=>f.page==='detail'))fields.push({...vcfg.link,name:'لینک صفحه',page:'list',attr:'href'});
+  return {list_url:vcfg.list_url,max_pages:vcfg.max_pages,item_selector:vcfg.item_selector,fields,
+    detail_link:vcfg.link&&fields.some(f=>f.page==='detail')?'لینک صفحه':null,detail_click:vcfg.click?.selector||null}}
+async function vSave(quiet){try{const c=await jpost(`/api/categories/${cat.id}/visual`,vPayload(),'PUT');
+    cat.config=c.config;if(!quiet)toast('ذخیره شد');const b=$('#btn-run');if(b)b.disabled=!vReady()}catch(err){toast(err.message)}}
+async function vOpen(){await vSave(true);
+  const url=vcfg.list_url?vcfg.list_url.replace('{page}','1'):`https://${cur.allowed_domains[0]}/`;toast('در حال باز کردن مرورگر…');
+  try{const r=await jpost(`/api/categories/${cat.id}/recorder/start`,{url,record_har:false});if(r.warning)toast('صفحه کامل باز نشد؛ ادامه دهید');recOpen(r.url)}
+  catch(err){toast(err.message)}}
+// chips above the remote browser: arm one, then click the element on the page
+function vBar(){const bar=$('#rec-pick');if(!vcfg||cat?.mode!=='visual'){bar.innerHTML='';return}
+  const chip=(key,label,done)=>`<button class="chip ${vArm===key?'on':''}" onclick="vArmSet('${key}')">${done?'✓ ':'🎯 '}${esc(label)}</button>`;
+  const needDetail=vcfg.fields.some(f=>f.page==='detail');
+  bar.innerHTML=`<span>${vArm?'<b>حالا روی همان چیز در صفحه کلیک کنید</b> (برای لغو دوباره روی دکمه بزنید)':'انتخاب کنید: '}</span>`
+    +vcfg.fields.map((f,i)=>f.name.trim()?chip('f'+i,f.name+(f.page==='detail'?' (جزئیات)':''),f.page==='list'?f.rel:f.selector):'').join('')
+    +(needDetail?chip('link','لینک صفحه جزئیات',vcfg.link?.rel)+chip('click','دکمه نمایش (اختیاری)',vcfg.click):'')}
+function vArmSet(k){vArm=vArm===k?null:k;vBar()}
+async function vPick(x,y){const k=vArm;vArm=null;
+  const f=k==='link'?{page:'list',attr:'href'}:k==='click'?{page:'detail',attr:'click'}:vcfg.fields[+k.slice(1)];
+  try{const r=await jpost('/api/recorder/pick',{x,y,where:f.page,item_selector:f.page==='list'?vcfg.item_selector:null,attr:f.attr||'text'});
+    if(r.error){toast(r.error);vBar();return}
+    if(f.page==='list'){
+      if(vcfg.item_selector&&r.item_selector!==vcfg.item_selector){  // a different list: earlier list picks are void
+        vcfg.fields.forEach(x=>{if(x.page==='list'){delete x.rel;delete x.rel_tags}});if(vcfg.link){delete vcfg.link.rel}
+        toast('لیست جدید تشخیص داده شد؛ بقیه اطلاعات صفحه لیست را دوباره انتخاب کنید')}
+      vcfg.item_selector=r.item_selector;
+      const v={rel:r.rel,rel_tags:r.rel_tags,count:`${fa(r.filled)} از ${fa(r.count)}`,sample:r.samples[0]||''};
+      if(k==='link')vcfg.link={name:'لینک صفحه',page:'list',attr:'href',...v};else Object.assign(f,v);
+      toast(`${fa(r.count)} مورد در این صفحه پیدا شد · نمونه: ${(r.samples[0]||'—').slice(0,40)}`)}
+    else if(k==='click'){vcfg.click={selector:r.selector,sample:r.samples[0]};toast('دکمه انتخاب شد؛ حالا خودتان یک بار رویش کلیک کنید تا اطلاعات نمایش داده شود')}
+    else{Object.assign(f,{selector:r.selector,count:'',sample:r.samples[0]||''});toast(`انتخاب شد: ${(r.samples[0]||'—').slice(0,50)}`)}
+    vBar();vRender();vSave(true)}
+  catch(err){toast(err.message);vBar()}
+  setTimeout(recShot,200)}
+
 let feedKey=null;
 async function showFeed(){feedKey??=(await api('/api/feed-info')).key;
   const base=location.origin,one=`${base}/feed/sections/${cat.id}?key=${feedKey}`,all=`${base}/feed/sites?key=${feedKey}`;
@@ -266,7 +339,7 @@ async function showFeed(){feedKey??=(await api('/api/feed-info')).key;
   $('#feed').innerHTML=`<p class="note">سایت شما می‌تواند داده‌ها را مستقیم از این آدرس‌ها (JSON) بخواند. کلید را محرمانه نگه دارید.</p>
     ${box(`داده‌های بخش «${esc(cat.name)}»`,one)}${box('لیست همه سایت‌ها و بخش‌ها',all)}
     <p class="note" style="margin-top:8px">برای همگام‌سازی فقط تغییرات: <code dir="ltr">&amp;since=2026-10-01T00:00:00</code> · صفحه‌بندی: <code dir="ltr">&amp;limit=500&amp;offset=500</code> (مقدار <code>next_offset</code> در پاسخ)</p>`}
-async function saveCat(){await jpost(`/api/categories/${cat.id}`,{name:$('#c-name').value,max_pages:+$('#c-pages').value||200},'PUT');toast('ذخیره شد');loadCats()}
+async function saveCat(){await jpost(`/api/categories/${cat.id}`,{name:$('#c-name').value,max_pages:cat.max_pages||200,mode:$('#c-mode').value},'PUT');toast('ذخیره شد');loadCats()}
 async function delCat(){if(!confirm(`بخش «${cat.name}» و داده‌هایش حذف شود؟`))return;await api(`/api/categories/${cat.id}`,{method:'DELETE'});cat=null;loadCats();loadSites()}
 async function clearItems(){if(!confirm('همه رکوردهای ذخیره‌شده این بخش پاک شود؟'))return;await api(`/api/categories/${cat.id}/items`,{method:'DELETE'});loadCats()}
 
@@ -301,7 +374,7 @@ async function loadItems(){const d=await api(`/api/categories/${cat.id}/items?li
       ${d.groups.map(g=>`<button class="chip ${g.source===src?'on':''}" onclick="setSrc(this.dataset.s)" data-s="${esc(g.source)}" dir="auto">${esc(g.source)} <small>(${fa(g.count)})</small></button>`).join('')}</div>`:'')
     +`<div class="row" style="justify-content:space-between">
       <h3 style="margin:0">${src?`گروه «${esc(src)}»: `:''}${fa(d.total)} رکورد</h3>
-      <div class="row"><button class="pri" onclick="fOpen()">☑ انتخاب اطلاعات${d.chosen?` (${fa(d.columns.length)})`:''}</button><input id="q" placeholder="جستجو…" value="${esc(q)}" style="width:180px" onkeydown="if(event.key==='Enter'){q=this.value;page=0;loadItems()}">
+      <div class="row">${cat.mode==='visual'?'':`<button class="pri" onclick="fOpen()">☑ انتخاب اطلاعات${d.chosen?` (${fa(d.columns.length)})`:''}</button>`}<input id="q" placeholder="جستجو…" value="${esc(q)}" style="width:180px" onkeydown="if(event.key==='Enter'){q=this.value;page=0;loadItems()}">
         ${src?`<a href="/api/categories/${cat.id}/export?fmt=json${qs}"><button>⬇ JSON این گروه</button></a><a href="/api/categories/${cat.id}/export?fmt=csv${qs}"><button>⬇ Excel این گروه</button></a>`:''}</div></div>
     ${d.rows.length?`<div class="tbl" style="margin-top:8px"><table><thead><tr>${d.columns.map(c=>`<th>${esc(c)}</th>`).join('')}</tr></thead><tbody>
       ${d.rows.map(r=>`<tr>${d.columns.map(c=>`<td title="${esc(r[c])}">${esc(r[c])}</td>`).join('')}</tr>`).join('')}</tbody></table></div>
@@ -349,7 +422,9 @@ let recTimer=null,recBusy=false;
 async function recStart(){const url=prompt('آدرس صفحه شروع (معمولاً صفحه لاگین یا صفحه اول سایت):',`https://${cur.allowed_domains[0]}/`);if(url===null)return;
   toast('در حال باز کردن مرورگر…');
   try{const r=await jpost(`/api/categories/${cat.id}/recorder/start`,{url});if(r.warning)toast('صفحه کامل باز نشد؛ ادامه دهید');recOpen(r.url)}catch(err){toast(err.message)}}
-function recOpen(url){$('#rec').classList.remove('hidden');$('#rec-url').value=url||'';$('#rec-img').focus();clearInterval(recTimer);recShot();recTimer=setInterval(recShot,700)}
+const REC_HELP_VISUAL='روی تصویر کلیک کنید و تایپ کنید، درست مثل یک مرورگر. <b>۱.</b> اگر لازم است لاگین کنید و به صفحه لیست بروید <b>۲.</b> روی اسم یک اطلاعات در نوار زیر بزنید و بعد روی همان چیز در صفحه کلیک کنید (موارد پیدا‌شده قرمز می‌شوند) <b>۳.</b> برای اطلاعات «جزئیات» یک مورد را باز کنید و همان‌جا انتخاب کنید <b>۴.</b> «پایان و ذخیره» (ورود شما هم برای جمع‌آوری ذخیره می‌شود).';
+let recHelpApi=null;
+function recOpen(url){vArm=null;vBar();recHelpApi??=$('#rec-help').innerHTML;$('#rec-help').innerHTML=cat?.mode==='visual'?REC_HELP_VISUAL:recHelpApi;$('#rec').classList.remove('hidden');$('#rec-url').value=url||'';$('#rec-img').focus();clearInterval(recTimer);recShot();recTimer=setInterval(recShot,700)}
 async function recShot(){if(recBusy)return;recBusy=true;
   try{const r=await fetch('/api/recorder/screen',{cache:'no-store'});
     if(r.status===409){recClose();toast('ضبط بسته شد (مدت زیادی بدون استفاده بود)');return}
@@ -364,11 +439,13 @@ function recClose(){clearInterval(recTimer);$('#rec').classList.add('hidden')}
 async function recStop(save){if(!save&&!confirm('ضبط لغو شود؟ چیزی ذخیره نمی‌شود.'))return;
   recClose();toast(save?'در حال ساختن فایل و بررسی درخواست‌ها…':'لغو شد');
   try{const r=await jpost('/api/recorder/stop',{save});
-    if(r.saved){if(cur){await loadCats(r.category_id);showHarStats(r.stats)}else toast('ذخیره شد')}}
+    if(r.saved){if(cat?.mode==='visual'&&cat.id===r.category_id){await vSave(true);await loadCats(r.category_id);toast('ذخیره شد؛ حالا «▶ گرفتن داده» را بزنید')}
+      else if(cur){await loadCats(r.category_id);if(r.stats)showHarStats(r.stats)}else toast('ذخیره شد')}}
   catch(err){toast(err.message)}}
 (()=>{const img=$('#rec-img');
   img.addEventListener('click',e=>{const b=img.getBoundingClientRect();img.focus();
-    recIn({type:'click',x:(e.clientX-b.left)*1280/b.width,y:(e.clientY-b.top)*800/b.height})});
+    const x=(e.clientX-b.left)*1280/b.width,y=(e.clientY-b.top)*800/b.height;
+    if(vArm)vPick(x,y);else recIn({type:'click',x,y})});
   img.addEventListener('wheel',e=>{e.preventDefault();const b=img.getBoundingClientRect();
     recIn({type:'scroll',dy:e.deltaY,x:(e.clientX-b.left)*1280/b.width,y:(e.clientY-b.top)*800/b.height})},{passive:false});
   img.addEventListener('keydown',e=>{if(e.ctrlKey||e.metaKey||e.altKey)return;

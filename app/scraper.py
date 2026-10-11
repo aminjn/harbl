@@ -7,7 +7,7 @@ from urllib.parse import parse_qsl, quote, urlencode, urlsplit, urlunsplit
 
 import httpx
 
-from . import db, extract
+from . import db, extract, visual
 from .config import MAX_RESPONSE_BYTES, OUTPUT_DIR, REQUEST_TIMEOUT, USER_AGENT_SUFFIX
 from .har import host_allowed
 
@@ -162,6 +162,8 @@ def run_category(category_id: int, trigger: str = "manual") -> dict:
         run_id = c.execute(
             "INSERT INTO runs(site_id, category_id, started_at, status, trigger, message) VALUES (?,?,?,?,?,?)",
             (site["id"], category_id, db.now(), "running", trigger, "شروع…")).lastrowid
+    if cat.get("mode") == "visual":
+        return _run_visual(cat, site, run_id, trigger)
 
     results, ok, fail, message, records_total, records_new, detailed = [], 0, 0, None, 0, 0, 0
     build_ids: dict[str, str] = {}  # old Next.js build id -> current one
@@ -304,6 +306,46 @@ def run_category(category_id: int, trigger: str = "manual") -> dict:
         c.execute("UPDATE runs SET finished_at=?, status=?, ok_count=?, fail_count=?, output_file=?, message=? WHERE id=?",
                   (db.now(), status, ok, fail, str(out_file) if out_file else None, message, run_id))
     return {"run_id": run_id, "status": status, "ok": ok, "fail": fail, "message": message}
+
+
+def _run_visual(cat: dict, site: dict, run_id: int, trigger: str) -> dict:
+    """Point-and-click section: a real browser reads the picked fields page by page."""
+    log: list[dict] = []
+    stats = {"pages": 0, "rows": 0, "new": 0, "details": 0}
+
+    def progress(st):
+        with db.conn() as c:
+            c.execute("UPDATE runs SET ok_count=?, message=? WHERE id=?",
+                      (st["pages"] + st["details"], f"{st['pages']} صفحه · {st['rows']} مورد ({st['new']} جدید)"
+                       + (f" · {st['details']} صفحه جزئیات" if st["details"] else ""), run_id))
+
+    try:
+        check_contract(site)
+        stats = visual.run(cat, site, progress, log.append)
+        with db.conn() as c:
+            total = c.execute("SELECT COUNT(*) FROM items WHERE category_id=?", (cat["id"],)).fetchone()[0]
+        errors = sum(1 for x in log if x.get("error"))
+        status = "ok" if not errors else ("partial" if stats["rows"] else "failed")
+        message = (f"{stats['rows']} مورد از {stats['pages']} صفحه ({stats['new']} جدید"
+                   + (f"، جزئیات {stats['details']}" if stats["details"] else "") + f") · مجموع این بخش: {total}")
+        if not stats["rows"]:
+            status, message = "failed", "در صفحه لیست موردی پیدا نشد؛ آدرس لیست را بررسی کنید یا اطلاعات را دوباره روی صفحه انتخاب کنید"
+    except ImportError:
+        status, message = "failed", "مرورگر روی سرور نصب نیست؛ sudo bash deploy/install-recorder.sh"
+    except (ScrapeBlocked, ValueError) as e:
+        status, message = "failed", str(e)
+    except Exception as e:
+        status, message = "failed", f"خطای داخلی: {e}"
+    out_dir = OUTPUT_DIR / f"site_{site['id']}" / f"cat_{cat['id']}"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_file = out_dir / f"run_{run_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+    out_file.write_text(json.dumps({"run_id": run_id, "trigger": trigger, "generated_at": db.now(), "pages": log},
+                                   ensure_ascii=False, indent=2), encoding="utf-8")
+    with db.conn() as c:
+        c.execute("UPDATE runs SET finished_at=?, status=?, ok_count=?, fail_count=?, output_file=?, message=? WHERE id=?",
+                  (db.now(), status, stats["pages"] + stats["details"], sum(1 for x in log if x.get("error")),
+                   str(out_file), message, run_id))
+    return {"run_id": run_id, "status": status, "message": message}
 
 
 def run_site(site_id: int, trigger: str = "manual", category_id: int | None = None) -> list[dict]:

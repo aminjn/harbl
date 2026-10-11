@@ -98,6 +98,8 @@ def init():
                 c.execute(f"ALTER TABLE {table} ADD COLUMN category_id INTEGER REFERENCES categories(id) ON DELETE CASCADE")
         for table, col, typ in (("items", "source", "TEXT"),
                                 ("categories", "fields", "TEXT NOT NULL DEFAULT '[]'"),  # chosen fields [{key,label}]; [] = all
+                                ("categories", "mode", "TEXT NOT NULL DEFAULT 'api'"),   # visual (click to pick) | api (HAR)
+                                ("categories", "config", "TEXT NOT NULL DEFAULT '{}'"),  # visual mode settings (see visual.py)
                                 ("items", "details_done", "TEXT NOT NULL DEFAULT '[]'"),  # detail requests already merged
                                 ("requests", "kind", "TEXT NOT NULL DEFAULT 'list'"),     # list | detail
                                 ("requests", "url_template", "TEXT"),                     # detail: /dr/{{id}}/...
