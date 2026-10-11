@@ -264,7 +264,7 @@ function apiPanel(){return `<div id="har-stats"></div>
 
 // ----- point-and-click section -----
 let vcfg=null,vArm=null;
-const WHERE={list:'صفحه لیست',detail:'صفحه جزئیات هر مورد'},ATTR={text:'متن',href:'لینک',src:'عکس'};
+const WHERE={list:'صفحه لیست (چند مورد زیر هم)',detail:'صفحه جزئیات هر مورد (پروفایل)'},ATTR={text:'متن',href:'لینک',src:'عکس'};
 function vLoad(){const c=cat.config||{};const fields=(c.fields||[]).map(f=>({...f}));
   const li=fields.findIndex(f=>f.name===c.detail_link);
   vcfg={list_url:c.list_url||'',max_pages:c.max_pages||200,item_selector:c.item_selector||'',
@@ -313,8 +313,21 @@ function vBar(){const bar=$('#rec-pick');if(!vcfg||cat?.mode!=='visual'){bar.inn
     +vcfg.fields.map((f,i)=>f.name.trim()?chip('f'+i,f.name+(f.page==='detail'?' (جزئیات)':''),f.page==='list'?f.rel:f.selector):'').join('')
     +(needDetail?chip('link','لینک صفحه جزئیات',vcfg.link?.rel)+chip('click','دکمه نمایش (اختیاری)',vcfg.click):'')}
 function vArmSet(k){vArm=vArm===k?null:k;vBar()}
+// is the remote browser on the list page (same address as the list URL, any page number)?
+function onListPage(){const u=$('#rec-url').value;if(!vcfg.list_url)return null;
+  try{const a=new URL(u),b=new URL(vcfg.list_url.replace('{page}','1'));
+    return a.host.replace(/^www\./,'')===b.host.replace(/^www\./,'')&&decodeURIComponent(a.pathname).replace(/\/$/,'')===decodeURIComponent(b.pathname).replace(/\/$/,'')}catch{return null}}
 async function vPick(x,y){const k=vArm;vArm=null;
   const f=k==='link'?{page:'list',attr:'href'}:k==='click'?{page:'detail',attr:'click'}:vcfg.fields[+k.slice(1)];
+  const onList=onListPage();
+  if(f.page==='list'&&!vcfg.list_url){
+    if(!confirm('آدرس صفحه لیست هنوز خالی است. همین صفحه به‌عنوان صفحه لیست ذخیره شود؟\n(بعداً در قدم ۱ جای شماره صفحه {page} بگذارید)')){vBar();return}
+    vcfg.list_url=$('#rec-url').value}
+  else if(f.page==='list'&&onList===false&&k!=='link'){
+    if(!confirm(`این صفحه، صفحه لیست نیست.\n«${f.name}» در صفحه جزئیات هر مورد (پروفایل) است؟\nتأیید = بله، از همین صفحه بخوان`)){vBar();return}
+    f.page='detail';delete f.rel;delete f.rel_tags;f.count=''}
+  else if(k==='link'&&onList===false){toast('«لینک صفحه جزئیات» را در صفحه لیست انتخاب کنید: روی اسم یک مورد در لیست');vBar();return}
+  else if(f.page==='detail'&&onList===true){toast('برای این اطلاعات، اول یک مورد از لیست را باز کنید (روی آن کلیک کنید) و بعد انتخاب کنید');vBar();return}
   try{const r=await jpost('/api/recorder/pick',{x,y,where:f.page,item_selector:f.page==='list'?vcfg.item_selector:null,attr:f.attr||'text'});
     if(r.error){toast(r.error);vBar();return}
     if(f.page==='list'){
