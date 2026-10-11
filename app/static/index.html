@@ -74,6 +74,8 @@ details{margin:10px 0}summary{cursor:pointer;color:var(--mute);font-size:13px}
 #rec .box{background:var(--card);border-radius:12px;padding:12px;width:min(1320px,100%);max-height:100%;overflow:auto}
 #rec-img{width:100%;aspect-ratio:1280/800;background:#000;border-radius:6px;cursor:pointer;outline:none;display:block;object-fit:contain}
 #rec-img:focus{box-shadow:0 0 0 3px var(--pri)}
+#rec-hl{position:absolute;pointer-events:none;border:2px solid #f43f5e;background:rgba(244,63,94,.10);border-radius:3px;transition:all .08s}
+#rec-hl span{position:absolute;top:-24px;right:-2px;max-width:420px;background:#f43f5e;color:#fff;font-size:12px;padding:1px 8px;border-radius:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .empty{text-align:center;padding:24px;border:2px dashed var(--line);border-radius:10px;color:var(--mute)}
 </style>
 </head>
@@ -144,7 +146,8 @@ details{margin:10px 0}summary{cursor:pointer;color:var(--mute);font-size:13px}
   </div>
   <p class="note" id="rec-help" style="margin:0 0 8px">روی تصویر کلیک کنید و تایپ کنید (اول روی کادر متن در سایت کلیک کنید). <b>۱.</b> لاگین کنید <b>۲.</b> صفحه‌های این بخش را باز کنید و صفحه بعد را بزنید <b>۳.</b> روی یک مورد کلیک کنید و اطلاعات کامل/شماره را باز کنید <b>۴.</b> «پایان و ذخیره».</p>
   <div class="row" style="justify-content:space-between;margin:0 0 8px"><div id="rec-pick" class="chips" style="margin:0"></div><small id="rec-st" class="failed"></small></div>
-  <img id="rec-img" tabindex="0" alt="">
+  <div id="rec-wrap" style="position:relative"><img id="rec-img" tabindex="0" alt="">
+    <div id="rec-hl" class="hidden"><span></span></div></div>
   <div class="row" style="margin-top:8px"><input id="rec-text" placeholder="متن طولانی یا فارسی را اینجا بنویسید و «ارسال» بزنید (مثلاً شماره موبایل یا کد)" style="flex:1" onkeydown="if(event.key==='Enter'){recSendText();event.preventDefault()}">
     <button onclick="recSendText()">ارسال متن</button><button onclick="recIn({type:'key',key:'Enter'})">Enter ↵</button></div>
 </div></div>
@@ -345,10 +348,21 @@ function vBar(){const bar=$('#rec-pick');if(!vcfg||cat?.mode!=='visual'){bar.inn
   const hasPage=vcfg.fields.some(f=>f.page==='detail'||f.page==='list'&&!vPaged()),needDetail=vPaged()&&vcfg.fields.some(f=>f.page==='detail');
   const lastName=vLast&&(vLast.k==='link'?'لینک':vLast.k==='click'?'دکمه':vcfg.fields[+vLast.k.slice(1)]?.name);
   const size=vLast&&!vArm&&vLast.k!=='click'?`<span style="margin-inline-start:12px">کادر «${esc(lastName||'')}»: <button onclick="vResize(1)" title="کادر دربرگیرنده">⬆ بزرگ‌تر</button><button onclick="vResize(-1)">⬇ کوچک‌تر</button></span>`:'';
+  const modeSw=vArm&&vArm!=='click'?`<span style="margin-inline-start:12px">حالت: <button class="chip ${vMode==='exact'?'on':''}" onclick="vMode='exact';vBar()">✎ دقیق (همان خط/کلمه)</button><button class="chip ${vMode==='box'?'on':''}" onclick="vMode='box';vBar()">▢ کل باکس</button></span>`:'';
   bar.innerHTML=`<span>${vArm?'<b>حالا روی همان چیز در صفحه کلیک کنید</b> (برای لغو دوباره روی دکمه بزنید)':'انتخاب کنید: '}</span>`
     +vcfg.fields.map((f,i)=>f.name.trim()?chip('f'+i,f.name+(f.page==='detail'?' (جزئیات)':''),f.page==='list'?f.rel:f.selector):'').join('')
-    +(needDetail?chip('link','لینک صفحه جزئیات',vcfg.link?.rel):'')+(hasPage?chip('click','دکمه نمایش (اختیاری)',vcfg.click):'')+size}
-function vArmSet(k){vArm=vArm===k?null:k;vBar()}
+    +(needDetail?chip('link','لینک صفحه جزئیات',vcfg.link?.rel):'')+(hasPage?chip('click','دکمه نمایش (اختیاری)',vcfg.click):'')+size+modeSw}
+function vArmSet(k){vArm=vArm===k?null:k;vHlHide();vBar()}
+// ----- live outline: what a click would take -----
+let vMode='exact',vHovTimer=null,vHovBusy=false;
+function vTarget(k){if(k==='link')return {where:'list',attr:'href'};if(k==='click')return {where:'detail',attr:'click'};
+  const f=vcfg.fields[+k.slice(1)];return {where:onListPage()?'list':'detail',attr:f.attr||'text'}}
+async function vHover(x,y){if(!vArm)return null;const t=vTarget(vArm);
+  return jpost('/api/recorder/hover',{x,y,mode:vArm==='click'?'exact':vMode,where:t.where,item_selector:t.where==='list'?vcfg.item_selector:null,attr:t.attr}).catch(()=>null)}
+function vHlShow(h){const hl=$('#rec-hl'),img=$('#rec-img');if(!h||!vArm){vHlHide();return}
+  const k=img.clientWidth/1280;Object.assign(hl.style,{left:h.x*k+'px',top:h.y*k+'px',width:h.w*k+'px',height:h.h*k+'px'});
+  hl.firstElementChild.textContent=h.text||'(بدون متن)';hl.classList.remove('hidden')}
+function vHlHide(){$('#rec-hl')?.classList.add('hidden')}
 // is the remote browser on the list page (same address as the list URL, any page number)?
 function onListPage(){const u=$('#rec-url').value;
   return vUrls().filter(l=>l.includes('{page}')).some(l=>{try{const a=new URL(u),b=new URL(l.replace('{page}','1'));
@@ -497,8 +511,12 @@ async function recStop(save){if(!save&&!confirm('ضبط لغو شود؟ چیزی
 (()=>{const img=$('#rec-img');
   img.addEventListener('click',e=>{const b=img.getBoundingClientRect();img.focus();
     const x=(e.clientX-b.left)*1280/b.width,y=(e.clientY-b.top)*800/b.height;
-    if(vArm)vPick(x,y);else recIn({type:'click',x,y})});
-  img.addEventListener('wheel',e=>{e.preventDefault();const b=img.getBoundingClientRect();
+    if(vArm){const k=vArm;vHover(x,y).then(h=>{vArm=k;vPick(x,y,h?.up||0);vHlHide()})}else recIn({type:'click',x,y})});
+  img.addEventListener('mousemove',e=>{if(!vArm)return;const b=img.getBoundingClientRect();
+    const x=(e.clientX-b.left)*1280/b.width,y=(e.clientY-b.top)*800/b.height;
+    clearTimeout(vHovTimer);vHovTimer=setTimeout(async()=>{if(vHovBusy)return;vHovBusy=true;try{vHlShow(await vHover(x,y))}finally{vHovBusy=false}},90)});
+  img.addEventListener('mouseleave',vHlHide);
+  img.addEventListener('wheel',e=>{e.preventDefault();vHlHide();const b=img.getBoundingClientRect();
     recIn({type:'scroll',dy:e.deltaY,x:(e.clientX-b.left)*1280/b.width,y:(e.clientY-b.top)*800/b.height})},{passive:false});
   img.addEventListener('keydown',e=>{if(e.ctrlKey||e.metaKey||e.altKey)return;
     if(e.key.length===1){recIn({type:'text',text:e.key});e.preventDefault()}

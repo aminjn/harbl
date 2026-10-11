@@ -82,6 +82,40 @@ PICK_JS = r"""
 }
 """
 
+# Runs in the page while the mouse moves over the remote screen: what a click would take.
+# mode 'box' climbs to the nearest visible box (border / shadow / own background), 'exact' keeps
+# the element under the mouse. Returns its rectangle, the `up` count for PICK_JS and a text preview.
+HOVER_JS = r"""
+([x, y, mode, where, itemSel, attr]) => {
+  const el0 = document.elementFromPoint(x, y);
+  if (!el0) return null;
+  const card0 = where === 'list' && itemSel ? el0.closest(itemSel) : null;
+  const vw = innerWidth, vh = innerHeight;
+  const boxy = e => {
+    const r = e.getBoundingClientRect();
+    if (r.width < 120 || r.height < 28 || (r.width > vw * 0.97 && r.height > vh * 0.9)) return false;
+    const cs = getComputedStyle(e), bg = cs.backgroundColor;
+    const hasBg = bg && bg !== 'transparent' && !/rgba\(.*,\s*0\)$/.test(bg);
+    const pbg = e.parentElement ? getComputedStyle(e.parentElement).backgroundColor : '';
+    return (parseFloat(cs.borderTopWidth) > 0 && cs.borderTopStyle !== 'none' && parseFloat(cs.borderBottomWidth) > 0)
+        || cs.boxShadow !== 'none' || (hasBg && bg !== pbg);
+  };
+  let up = 0;
+  if (mode === 'box') {
+    let e = el0, n = 0;
+    while (e && e !== document.body && !boxy(e) && e !== card0) { e = e.parentElement; n++; }
+    up = e && e !== document.body ? n : 0;
+  }
+  let el = el0;  // same climbing as PICK_JS
+  for (let i = 0; i < up && el.parentElement && el !== card0 && el.parentElement !== document.body; i++) el = el.parentElement;
+  if (attr === 'href' || attr === 'click') el = el.closest('a,button,[role=button],[onclick]') || el;
+  if (attr === 'src') el = el.closest('img') || el;
+  const r = el.getBoundingClientRect();
+  return {up, x: r.left, y: r.top, w: r.width, h: r.height,
+          text: (el.innerText || el.textContent || '').trim().replace(/\s+/g, ' ').slice(0, 140)};
+}
+"""
+
 # Runs in the page: read every card of a list page.
 LIST_JS = r"""
 ([itemSel, fields]) => [...document.querySelectorAll(itemSel)].map(c => {

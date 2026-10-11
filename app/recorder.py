@@ -129,6 +129,12 @@ class Recorder:
         page = self._page()
         return await page.evaluate(visual.PICK_JS, [x, y, where, item_selector or None, attr, max(int(up), 0)])
 
+    async def hover(self, x: float, y: float, mode: str, where: str, item_selector: str | None, attr: str) -> dict | None:
+        """What a click at (x, y) would pick, for the live outline in the panel (see visual.HOVER_JS)."""
+        if not self.active:
+            raise RecorderError("ضبطی در حال انجام نیست")
+        return await self.page.evaluate(visual.HOVER_JS, [x, y, mode, where, item_selector or None, attr])
+
     async def stop(self, save: bool = True) -> tuple[int | None, bytes | None]:
         """Close the browser; returns (category_id, HAR bytes) when saving."""
         async with self.lock:

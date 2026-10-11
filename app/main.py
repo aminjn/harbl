@@ -363,6 +363,25 @@ async def recorder_input(ev: dict):
     return {"ok": True, "url": recorder.page.url if recorder.page else None}
 
 
+class RecHover(BaseModel):
+    x: float
+    y: float
+    mode: str = "exact"            # exact | box
+    where: str = "detail"
+    item_selector: str | None = None
+    attr: str = "text"
+
+
+@app.post("/api/recorder/hover", dependencies=[Depends(auth)])
+async def recorder_hover(body: RecHover):
+    try:
+        return await recorder.hover(body.x, body.y, body.mode, body.where, body.item_selector, body.attr)
+    except RecorderError as e:
+        raise HTTPException(409, str(e))
+    except Exception:
+        return None  # page navigating: no outline this time
+
+
 @app.post("/api/recorder/pick", dependencies=[Depends(auth)])
 async def recorder_pick(body: RecPick):
     try:
