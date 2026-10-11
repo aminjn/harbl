@@ -48,6 +48,9 @@ async def lifespan(app):
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     scheduler.start()
     with db.conn() as c:
+        # Drop tracker/analytics requests imported by older versions
+        junk = [r["id"] for r in c.execute("SELECT id, url FROM requests") if har.is_tracker(r["url"])]
+        c.executemany("DELETE FROM requests WHERE id=?", [(i,) for i in junk])
         for r in c.execute("SELECT * FROM sites"):
             sync_schedule(db.row(r))
     yield
