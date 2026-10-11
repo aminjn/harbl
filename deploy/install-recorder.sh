@@ -33,6 +33,40 @@ HELP
   exit 1
 }
 
+# Download speed (bytes/s) of the first MB of each URL, fastest first: "speed url" lines.
+# For a PyPI index (ending in /simple) the playwright wheel's own link on that index is measured.
+rank() {
+  python3 - "$PW_VER" "$@" <<'PY'
+import re, sys, time, urllib.request
+from urllib.parse import urljoin
+ver, urls = sys.argv[1], sys.argv[2:]
+out = []
+for u in urls:
+    target, speed = u, 0
+    try:
+        if u.endswith("/simple"):
+            page = urllib.request.urlopen(u + "/playwright/", timeout=15).read().decode("utf-8", "replace")
+            m = re.search(r'href="([^"]*playwright-%s-py3-none-manylinux1_x86_64\.whl[^"]*)"' % re.escape(ver), page)
+            if not m:
+                raise ValueError("no wheel")
+            target = urljoin(u + "/playwright/", m.group(1).replace("&amp;", "&"))
+        req = urllib.request.Request(target, headers={"Range": "bytes=0-1048575"})
+        t0, got = time.time(), 0
+        with urllib.request.urlopen(req, timeout=15) as r:
+            while time.time() - t0 < 15:
+                chunk = r.read(65536)
+                if not chunk:
+                    break
+                got += len(chunk)
+        speed = int(got / max(time.time() - t0, 0.01))
+    except Exception:
+        pass
+    out.append((speed, u))
+for speed, u in sorted(out, reverse=True):
+    print(speed, u)
+PY
+}
+
 echo "==> نصب Playwright $PW_VER"
 RESUME=""
 "$PIP" install --help 2>/dev/null | grep -q -- "--resume-retries" && RESUME="--resume-retries 20"
@@ -41,8 +75,11 @@ if ls "$OFFLINE"/playwright-*.whl >/dev/null 2>&1; then
   "$PIP" install --no-index --find-links "$OFFLINE" "playwright==$PW_VER" && installed=1
 fi
 if [ $installed -eq 0 ]; then
-  for idx in "https://pypi.org/simple" "https://mirror-pypi.runflare.com/simple" \
-             "https://pypi.tuna.tsinghua.edu.cn/simple" "https://mirrors.aliyun.com/pypi/simple"; do
+  echo "    سنجش سرعت منبع‌ها…"
+  RANKED="$(rank "https://mirror-pypi.runflare.com/simple" "https://pypi.org/simple" \
+                 "https://pypi.tuna.tsinghua.edu.cn/simple" "https://mirrors.aliyun.com/pypi/simple")"
+  echo "$RANKED" | awk '{printf "      %6d KB/s  %s\n", $1/1024, $2}'
+  for idx in $(echo "$RANKED" | awk '{print $2}'); do
     echo "    تلاش از $idx"
     if "$PIP" install --timeout 60 --retries 8 $RESUME -i "$idx" "playwright==$PW_VER"; then installed=1; break; fi
   done
@@ -69,7 +106,17 @@ if [ -f "$OFFLINE/chromium-headless-shell-linux.zip" ] && [ -n "$SHELL_DIR" ]; t
     touch "$SHELL_DIR/INSTALLATION_COMPLETE" "$SHELL_DIR/DEPENDENCIES_VALIDATED" && got=1
 fi
 if [ $got -eq 0 ]; then
-  for host in "" "https://cdn.npmmirror.com/binaries/playwright"; do
+  # same file on the npmmirror CDN: <host>/builds/chromium/<rev>/<zip>
+  ALT_URL="https://cdn.npmmirror.com/binaries/playwright/${SHELL_URL#*/playwright/}"
+  echo "    سنجش سرعت منبع‌ها…"
+  RANKED="$(rank "$SHELL_URL" "$ALT_URL")"
+  echo "$RANKED" | awk '{printf "      %6d KB/s  %s\n", $1/1024, $2}'
+  HOSTS=""
+  for u in $(echo "$RANKED" | awk '{print $2}'); do
+    [ "$u" = "$ALT_URL" ] && HOSTS="$HOSTS https://cdn.npmmirror.com/binaries/playwright" || HOSTS="$HOSTS default"
+  done
+  for host in $HOSTS; do
+    [ "$host" = "default" ] && host=""
     echo "    تلاش از ${host:-سرور اصلی Playwright}"
     for try in 1 2 3; do
       if PLAYWRIGHT_DOWNLOAD_HOST="$host" "$PW" install --only-shell chromium; then got=1; break 2; fi
