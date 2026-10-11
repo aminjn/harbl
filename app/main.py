@@ -389,10 +389,56 @@ def _columns(rows: list[dict], limit: int | None = None) -> list[str]:
     return cols[:limit] if limit else cols
 
 
+def _fields(cat: dict) -> list[dict]:
+    try:
+        return [f for f in json.loads(cat.get("fields") or "[]") if f.get("key")]
+    except ValueError:
+        return []
+
+
+def _project(row: dict, fields: list[dict]) -> dict:
+    """Only the chosen fields, under their chosen names, in the chosen order (all fields when none chosen)."""
+    if not fields:
+        return row
+    return {(f.get("label") or f["key"]): row.get(f["key"]) for f in fields}
+
+
+class FieldsIn(BaseModel):
+    fields: list[dict]
+
+
+@app.get("/api/categories/{cid}/fields", dependencies=[Depends(auth)])
+def list_fields(cid: int):
+    """Every field found in this section's records, with how often it is filled and a sample value."""
+    with db.conn() as c:
+        cat = _get_cat(c, cid)
+        rows = [json.loads(r["data"]) for r in c.execute(
+            "SELECT data FROM items WHERE category_id=? ORDER BY last_seen DESC LIMIT 1000", (cid,))]
+    found: dict[str, dict] = {}
+    for r in rows:
+        for k, v in r.items():
+            f = found.setdefault(k, {"key": k, "count": 0, "sample": None})
+            if v not in (None, "", "[]", "{}"):
+                f["count"] += 1
+                if f["sample"] is None:
+                    f["sample"] = str(v)[:120]
+    return {"total": len(rows), "selected": _fields(cat),
+            "fields": sorted(found.values(), key=lambda f: -f["count"])}
+
+
+@app.put("/api/categories/{cid}/fields", dependencies=[Depends(auth)])
+def save_fields(cid: int, body: FieldsIn):
+    clean = [{"key": str(f["key"]), "label": str(f.get("label") or "").strip()} for f in body.fields if f.get("key")]
+    with db.conn() as c:
+        _get_cat(c, cid)
+        c.execute("UPDATE categories SET fields=? WHERE id=?", (json.dumps(clean, ensure_ascii=False), cid))
+    return {"ok": True}
+
+
 @app.get("/api/categories/{cid}/items", dependencies=[Depends(auth)])
 def list_items(cid: int, q: str = "", source: str = "", limit: int = 50, offset: int = 0):
     with db.conn() as c:
-        _get_cat(c, cid)
+        cat = _get_cat(c, cid)
         groups = [{"source": r["source"] or "—", "count": r["n"]} for r in c.execute(
             "SELECT source, COUNT(*) n FROM items WHERE category_id=? GROUP BY source ORDER BY n DESC", (cid,))]
         where, args = "category_id=?", [cid]
@@ -405,7 +451,11 @@ def list_items(cid: int, q: str = "", source: str = "", limit: int = 50, offset:
         total = c.execute(f"SELECT COUNT(*) FROM items WHERE {where}", args).fetchone()[0]
         rows = [json.loads(r["data"]) for r in c.execute(
             f"SELECT data FROM items WHERE {where} ORDER BY id LIMIT ? OFFSET ?", args + [min(limit, 500), offset])]
-    return {"total": total, "groups": groups, "columns": _columns(rows, 8), "rows": rows}
+    fields = _fields(cat)
+    if fields:
+        rows = [_project(r, fields) for r in rows]
+        return {"total": total, "groups": groups, "columns": list(rows[0]) if rows else [], "rows": rows, "chosen": True}
+    return {"total": total, "groups": groups, "columns": _columns(rows, 8), "rows": rows, "chosen": False}
 
 
 @app.delete("/api/categories/{cid}/items", dependencies=[Depends(auth)])
@@ -426,19 +476,21 @@ def export_items(cid: int, fmt: str = "json", source: str = ""):
             args.append(source)
         rows = c.execute(sql + " ORDER BY id", args).fetchall()
     name = f"{site['name']}-{cat['name']}" + (f"-{source.replace('/', '_')}" if source else "")
+    fields = _fields(cat)
     if fmt == "json":
         groups: dict[str, list] = {}
         for r in rows:
-            groups.setdefault(r["source"] or "—", []).append(json.loads(r["data"]))
+            groups.setdefault(r["source"] or "—", []).append(_project(json.loads(r["data"]), fields))
         doc = {"site": site["name"], "section": cat["name"], "contract_ref": site["contract_ref"],
                "generated_at": db.now(), "total": len(rows),
                "groups": [{"source": k, "count": len(v), "items": v} for k, v in groups.items()]}
         body, media, ext = json.dumps(doc, ensure_ascii=False, indent=2).encode(), "application/json", "json"
     else:
-        items = [dict(json.loads(r["data"]), _source=r["source"], _first_seen=r["first_seen"], _last_seen=r["last_seen"])
+        items = [dict(_project(json.loads(r["data"]), fields), _source=r["source"], _first_seen=r["first_seen"], _last_seen=r["last_seen"])
                  for r in rows]
         buf = io.StringIO()
-        cols = [k for k in _columns(items) if not k.startswith("_")] + ["_source", "_first_seen", "_last_seen"]
+        chosen = [f.get("label") or f["key"] for f in fields] or [k for k in _columns(items) if not k.startswith("_")]
+        cols = chosen + ["_source", "_first_seen", "_last_seen"]
         w = csv.DictWriter(buf, fieldnames=cols, extrasaction="ignore")
         w.writeheader()
         w.writerows(items)
@@ -560,7 +612,7 @@ def feed_section(cid: int, since: str = "", source: str = "", limit: int = Query
         "total": total, "offset": offset,
         "next_offset": offset + len(rows) if offset + len(rows) < total else None,
         "items": [{"key": r["item_key"], "source": r["source"], "first_seen": r["first_seen"],
-                   "last_seen": r["last_seen"], "data": json.loads(r["data"])} for r in rows],
+                   "last_seen": r["last_seen"], "data": _project(json.loads(r["data"]), _fields(cat))} for r in rows],
     }
 
 

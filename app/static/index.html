@@ -60,7 +60,16 @@ details{margin:10px 0}summary{cursor:pointer;color:var(--mute);font-size:13px}
 .tbl td{max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .result{display:flex;gap:16px;align-items:center;justify-content:space-between;flex-wrap:wrap;background:var(--bg);border-radius:10px;padding:14px;margin-top:10px}
 .result .num{font-size:28px;font-weight:700}
-#rec.hidden{display:none}
+#rec.hidden,#fsel.hidden{display:none}
+#fsel{position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:50;display:flex;align-items:center;justify-content:center;padding:12px}
+#fsel .box{background:var(--card);border-radius:12px;padding:16px;width:min(900px,100%);max-height:92vh;display:flex;flex-direction:column}
+#f-list{overflow:auto;flex:1;margin:8px 0;border:1px solid var(--line);border-radius:8px}
+.frow{display:grid;grid-template-columns:28px minmax(0,1.1fr) minmax(0,1.4fr) minmax(0,1fr) 56px;gap:8px;align-items:center;padding:6px 10px;border-bottom:1px solid var(--line)}
+.frow.on{background:var(--bg)}
+.frow code{direction:ltr;text-align:left;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.frow .smp{font-size:12px;color:var(--mute);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.frow input[type=text]{padding:4px 6px}
+.frow button{padding:0 6px}
 #rec{position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:50;display:flex;align-items:center;justify-content:center;padding:12px}
 #rec .box{background:var(--card);border-radius:12px;padding:12px;width:min(1320px,100%);max-height:100%;overflow:auto}
 #rec-img{width:100%;aspect-ratio:1280/800;background:#000;border-radius:6px;cursor:pointer;outline:none;display:block;object-fit:contain}
@@ -137,6 +146,16 @@ details{margin:10px 0}summary{cursor:pointer;color:var(--mute);font-size:13px}
   <img id="rec-img" tabindex="0" alt="">
   <div class="row" style="margin-top:8px"><input id="rec-text" placeholder="متن طولانی یا فارسی را اینجا بنویسید و «ارسال» بزنید (مثلاً شماره موبایل یا کد)" style="flex:1" onkeydown="if(event.key==='Enter'){recSendText();event.preventDefault()}">
     <button onclick="recSendText()">ارسال متن</button><button onclick="recIn({type:'key',key:'Enter'})">Enter ↵</button></div>
+</div></div>
+<div id="fsel" class="hidden"><div class="box">
+  <div class="row" style="justify-content:space-between"><h2 style="margin:0">انتخاب اطلاعات «<span id="f-cat"></span>»</h2>
+    <input id="f-q" placeholder="جستجوی فیلد یا مقدار…" style="width:220px" oninput="fRender()"></div>
+  <p class="note" style="margin:8px 0 0">تیک بزنید چه اطلاعاتی را می‌خواهید و اگر خواستید اسم فارسی بدهید (مثلاً <code dir="ltr">doctor.phone</code> ← «تلفن»). ترتیب با ↑↓. فقط همین‌ها در جدول، JSON، Excel و API سایت شما می‌آیند. <span id="f-info"></span></p>
+  <div id="f-list"></div>
+  <div class="row" style="justify-content:space-between">
+    <div class="row"><button class="pri big" onclick="fSave()">ذخیره</button><button onclick="fClose()">انصراف</button></div>
+    <div class="row"><button onclick="fAll(true)">انتخاب همه (فیلتر شده)</button><button onclick="fAll(false)">هیچ‌کدام</button></div>
+  </div>
 </div></div>
 <div id="toast"></div>
 <script>
@@ -282,13 +301,13 @@ async function loadItems(){const d=await api(`/api/categories/${cat.id}/items?li
       ${d.groups.map(g=>`<button class="chip ${g.source===src?'on':''}" onclick="setSrc(this.dataset.s)" data-s="${esc(g.source)}" dir="auto">${esc(g.source)} <small>(${fa(g.count)})</small></button>`).join('')}</div>`:'')
     +`<div class="row" style="justify-content:space-between">
       <h3 style="margin:0">${src?`گروه «${esc(src)}»: `:''}${fa(d.total)} رکورد</h3>
-      <div class="row"><input id="q" placeholder="جستجو…" value="${esc(q)}" style="width:180px" onkeydown="if(event.key==='Enter'){q=this.value;page=0;loadItems()}">
+      <div class="row"><button class="pri" onclick="fOpen()">☑ انتخاب اطلاعات${d.chosen?` (${fa(d.columns.length)})`:''}</button><input id="q" placeholder="جستجو…" value="${esc(q)}" style="width:180px" onkeydown="if(event.key==='Enter'){q=this.value;page=0;loadItems()}">
         ${src?`<a href="/api/categories/${cat.id}/export?fmt=json${qs}"><button>⬇ JSON این گروه</button></a><a href="/api/categories/${cat.id}/export?fmt=csv${qs}"><button>⬇ Excel این گروه</button></a>`:''}</div></div>
     ${d.rows.length?`<div class="tbl" style="margin-top:8px"><table><thead><tr>${d.columns.map(c=>`<th>${esc(c)}</th>`).join('')}</tr></thead><tbody>
       ${d.rows.map(r=>`<tr>${d.columns.map(c=>`<td title="${esc(r[c])}">${esc(r[c])}</td>`).join('')}</tr>`).join('')}</tbody></table></div>
       ${pages>1?`<div class="row" style="margin-top:6px;justify-content:center"><button ${page?'':'disabled'} onclick="page--;loadItems()">قبلی</button>
         <span>صفحه ${fa(page+1)} از ${fa(pages)}</span><button ${page+1<pages?'':'disabled'} onclick="page++;loadItems()">بعدی</button></div>`:''}
-      <small class="note" style="display:block;margin-top:6px">جدول فقط ۸ ستون اصلی را نشان می‌دهد؛ فایل JSON و Excel همه ستون‌ها را دارند.</small>`
+      ${d.chosen?'':'<small class="note" style="display:block;margin-top:6px">همه اطلاعات ذخیره می‌شود؛ جدول ۸ ستون اول را نشان می‌دهد. با «☑ انتخاب اطلاعات» مشخص کنید دقیقاً چه چیزهایی (مثلاً نام، تخصص، آدرس، تلفن) در خروجی بیاید.</small>'}`
     :`<p class="note">${q?'نتیجه‌ای پیدا نشد.':'هنوز داده‌ای جمع نشده. «▶ گرفتن داده این بخش» را بزنید.'}</p>`}`}
 function setSrc(v){src=v;page=0;loadItems()}
 
@@ -301,6 +320,29 @@ function watchRun(){$('#btn-run')?.setAttribute('disabled','');$('#btn-run-all')
       toast('تمام شد'+(cat?.last_run?': '+stName[cat.last_run.status]:''))}},2000)}
 async function runCat(){try{await api(`/api/categories/${cat.id}/run`,{method:'POST'});toast('اجرا شروع شد');watchRun()}catch(err){toast(err.message)}}
 async function runAll(){try{await api(`/api/sites/${cur.id}/run`,{method:'POST'});toast('اجرای همه بخش‌ها شروع شد');watchRun()}catch(err){toast(err.message)}}
+
+// ----- choose fields -----
+let fData=[];  // [{key,count,sample,on,label}] in display order (chosen first, in chosen order)
+async function fOpen(){const d=await api(`/api/categories/${cat.id}/fields`);
+  if(!d.fields.length)return toast('اول «▶ گرفتن داده» را بزنید تا فیلدها پیدا شوند');
+  const sel=new Map(d.selected.map((f,i)=>[f.key,{label:f.label,i}]));
+  fData=d.fields.map(f=>({...f,on:sel.has(f.key),label:sel.get(f.key)?.label||''}));
+  fData.sort((a,b)=>(sel.has(b.key)-sel.has(a.key))||((sel.get(a.key)?.i??0)-(sel.get(b.key)?.i??0)));
+  $('#f-cat').textContent=cat.name;$('#f-info').textContent=`(${fa(d.fields.length)} فیلد در ${fa(d.total)} رکورد)`;$('#f-q').value='';
+  $('#fsel').classList.remove('hidden');fRender()}
+function fVisible(f){const q=$('#f-q').value.trim().toLowerCase();return !q||f.key.toLowerCase().includes(q)||(f.sample||'').toLowerCase().includes(q)||f.label.includes(q)}
+function fRender(){
+  $('#f-list').innerHTML=fData.map((f,i)=>fVisible(f)?`<div class="frow ${f.on?'on':''}">
+    <input type="checkbox" style="width:auto" ${f.on?'checked':''} onchange="fData[${i}].on=this.checked;fRender()">
+    <code title="${esc(f.key)}">${esc(f.key)}</code>
+    <span class="smp" title="${esc(f.sample)}">${esc(f.sample??'—')} <small>(${fa(f.count)})</small></span>
+    <input type="text" placeholder="نام در خروجی" value="${esc(f.label)}" oninput="fData[${i}].label=this.value;if(!fData[${i}].on){fData[${i}].on=true;this.closest('.frow').classList.add('on');this.closest('.frow').firstElementChild.checked=true}">
+    <span>${f.on?`<button onclick="fMove(${i},-1)" title="بالا">↑</button><button onclick="fMove(${i},1)" title="پایین">↓</button>`:''}</span></div>`:'').join('')}
+function fMove(i,d){const j=i+d;if(j<0||j>=fData.length)return;[fData[i],fData[j]]=[fData[j],fData[i]];fRender()}
+function fAll(on){fData.forEach(f=>{if(fVisible(f))f.on=on});fRender()}
+function fClose(){$('#fsel').classList.add('hidden')}
+async function fSave(){const fields=fData.filter(f=>f.on).map(f=>({key:f.key,label:f.label.trim()}));
+  try{await jpost(`/api/categories/${cat.id}/fields`,{fields},'PUT');fClose();toast(fields.length?`${fa(fields.length)} فیلد انتخاب شد`:'همه فیلدها');loadItems()}catch(err){toast(err.message)}}
 
 // ----- recording browser -----
 let recTimer=null,recBusy=false;

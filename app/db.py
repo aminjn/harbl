@@ -97,6 +97,7 @@ def init():
             if "category_id" not in {r["name"] for r in c.execute(f"PRAGMA table_info({table})")}:
                 c.execute(f"ALTER TABLE {table} ADD COLUMN category_id INTEGER REFERENCES categories(id) ON DELETE CASCADE")
         for table, col, typ in (("items", "source", "TEXT"),
+                                ("categories", "fields", "TEXT NOT NULL DEFAULT '[]'"),  # chosen fields [{key,label}]; [] = all
                                 ("items", "details_done", "TEXT NOT NULL DEFAULT '[]'"),  # detail requests already merged
                                 ("requests", "kind", "TEXT NOT NULL DEFAULT 'list'"),     # list | detail
                                 ("requests", "url_template", "TEXT"),                     # detail: /dr/{{id}}/...
