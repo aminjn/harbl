@@ -53,15 +53,15 @@ for u in urls:
     target, speed = u, 0
     try:
         if u.endswith("/simple"):
-            page = urllib.request.urlopen(u + "/playwright/", timeout=15).read().decode("utf-8", "replace")
+            page = urllib.request.urlopen(u + "/playwright/", timeout=8).read().decode("utf-8", "replace")
             m = re.search(r'href="([^"]*playwright-%s-py3-none-manylinux1_x86_64\.whl[^"]*)"' % re.escape(ver), page)
             if not m:
                 raise ValueError("no wheel")
             target = urljoin(u + "/playwright/", m.group(1).replace("&amp;", "&"))
         req = urllib.request.Request(target, headers={"Range": "bytes=0-1048575"})
         t0, got = time.time(), 0
-        with urllib.request.urlopen(req, timeout=15) as r:
-            while time.time() - t0 < 15:
+        with urllib.request.urlopen(req, timeout=8) as r:
+            while time.time() - t0 < 8:
                 chunk = r.read(65536)
                 if not chunk:
                     break
@@ -79,7 +79,11 @@ echo "==> نصب Playwright $PW_VER"
 RESUME=""
 "$PIP" install --help 2>/dev/null | grep -q -- "--resume-retries" && RESUME="--resume-retries 20"
 installed=0
-if ls "$OFFLINE"/playwright-*.whl >/dev/null 2>&1; then
+if "$APP_DIR/venv/bin/python" -c "import importlib.metadata as m,sys;sys.exit(m.version('playwright')!='$PW_VER')" 2>/dev/null; then
+  echo "    از قبل نصب است"
+  installed=1
+fi
+if [ $installed -eq 0 ] && ls "$OFFLINE"/playwright-*.whl >/dev/null 2>&1; then
   "$PIP" install --no-index --find-links "$OFFLINE" "playwright==$PW_VER" && installed=1
 fi
 if [ $installed -eq 0 ]; then
