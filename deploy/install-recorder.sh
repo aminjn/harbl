@@ -101,27 +101,87 @@ SHELL_DIR="$(echo "$INFO" | awk '/chromium-headless-shell/{f=1} f&&/Install loca
 SHELL_URL="$(echo "$INFO" | awk '/chromium-headless-shell/{f=1} f&&/Download url/{print $3; exit}')"
 
 echo "==> کتابخانه‌های سیستمی لازم برای Chromium (از مخزن Ubuntu)"
+# another apt/dpkg (e.g. automatic updates) may hold the lock: wait for it
+for i in $(seq 1 120); do
+  fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1 || pgrep -x "apt|apt-get|dpkg|unattended-upgr" >/dev/null || break
+  [ "$i" = 1 ] && echo "    منتظر تمام شدن apt دیگر…"
+  sleep 5
+done
 if ! "$PW" install-deps chromium; then
   # install them one by one so a renamed package on a newer release does not stop the rest
-  apt-get update -y >/dev/null 2>&1 || true
+  apt-get -o DPkg::Lock::Timeout=600 update -y >/dev/null 2>&1 || true
   for pkg in libasound2t64 libasound2 libatk-bridge2.0-0t64 libatk1.0-0t64 libatspi2.0-0t64 libcairo2 libcups2t64 \
              libdbus-1-3 libdrm2 libgbm1 libglib2.0-0t64 libnspr4 libnss3 libpango-1.0-0 libx11-6 libxcb1 \
              libxcomposite1 libxdamage1 libxext6 libxfixes3 libxkbcommon0 libxrandr2 libxshmfence1 \
              fonts-liberation fonts-noto-core fonts-noto-color-emoji fonts-vazirmatn; do
-    DEBIAN_FRONTEND=noninteractive apt-get install -y -q "$pkg" >/dev/null 2>&1 && echo "      ✓ $pkg" || echo "      - $pkg (نبود)"
+    DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=600 install -y -q "$pkg" >/dev/null 2>&1 && echo "      ✓ $pkg" || echo "      - $pkg (نبود)"
   done
 fi
 
 echo "==> دانلود Chromium (حدود ۱۰۰ مگابایت؛ ممکن است چند دقیقه طول بکشد)"
 mkdir -p "$BROWSERS"
 got=0
-if [ -f "$OFFLINE/chromium-headless-shell-linux.zip" ] && [ -n "$SHELL_DIR" ]; then
+ZIP="$OFFLINE/chromium-headless-shell-linux.zip"
+if [ ! -f "$ZIP" ] && [ -n "$SHELL_URL" ] && [ -n "$SHELL_DIR" ] && [ ! -f "$SHELL_DIR/INSTALLATION_COMPLETE" ]; then
+  echo "    دانلود موازی (۸ اتصال هم‌زمان)"
+  mkdir -p "$OFFLINE"
+  python3 - "$SHELL_URL" "$ZIP" <<'PY' || rm -f "$ZIP"
+import os, sys, threading, time, urllib.request, zipfile
+url, out = sys.argv[1], sys.argv[2]
+size = int(urllib.request.urlopen(urllib.request.Request(url, method="HEAD"), timeout=60).headers["Content-Length"])
+parts, done, lock = 8, [0] * 8, threading.Lock()
+bounds = [(i * size // parts, (i + 1) * size // parts - 1) for i in range(parts)]
+def get(i):
+    start, end = bounds[i]
+    path = f"{out}.part{i}"
+    for attempt in range(30):  # resume each part after a dropped connection
+        have = os.path.getsize(path) if os.path.exists(path) else 0
+        done[i] = have
+        if start + have > end:
+            return
+        try:
+            req = urllib.request.Request(url, headers={"Range": f"bytes={start + have}-{end}"})
+            with urllib.request.urlopen(req, timeout=60) as r, open(path, "ab") as f:
+                while chunk := r.read(65536):
+                    f.write(chunk)
+                    done[i] += len(chunk)
+        except Exception:
+            time.sleep(3)
+    raise SystemExit(f"part {i} failed")
+threads = [threading.Thread(target=get, args=(i,), daemon=True) for i in range(parts)]
+for t in threads: t.start()
+t0 = time.time()
+while any(t.is_alive() for t in threads):
+    time.sleep(2)
+    got = sum(done); speed = got / max(time.time() - t0, 1)
+    print(f"\r      {got/2**20:6.1f}/{size/2**20:.1f} MB  {speed/1024:7.0f} KB/s", end="", flush=True)
+print()
+if sum(os.path.getsize(f"{out}.part{i}") for i in range(parts)) != size:
+    raise SystemExit("incomplete")
+with open(out, "wb") as f:
+    for i in range(parts):
+        with open(f"{out}.part{i}", "rb") as p:
+            f.write(p.read())
+        os.remove(f"{out}.part{i}")
+zipfile.ZipFile(out).testzip()
+PY
+fi
+if [ -f "$ZIP" ] && [ -n "$SHELL_DIR" ] && [ ! -f "$SHELL_DIR/INSTALLATION_COMPLETE" ]; then
   echo "    از فایل آفلاین"
   rm -rf "$SHELL_DIR" && mkdir -p "$SHELL_DIR" && \
-    python3 -c "import zipfile,sys;zipfile.ZipFile(sys.argv[1]).extractall(sys.argv[2])" "$OFFLINE/chromium-headless-shell-linux.zip" "$SHELL_DIR" && \
+    python3 -c "
+import os, sys, zipfile
+z = zipfile.ZipFile(sys.argv[1])
+for i in z.infolist():  # extractall() drops the executable bits
+    z.extract(i, sys.argv[2])
+    mode = i.external_attr >> 16
+    if mode and not i.is_dir():
+        os.chmod(os.path.join(sys.argv[2], i.filename), mode & 0o777)
+" "$ZIP" "$SHELL_DIR" && \
     chmod +x "$SHELL_DIR"/chrome-linux/headless_shell && \
-    touch "$SHELL_DIR/INSTALLATION_COMPLETE" "$SHELL_DIR/DEPENDENCIES_VALIDATED" && got=1
+    touch "$SHELL_DIR/INSTALLATION_COMPLETE" "$SHELL_DIR/DEPENDENCIES_VALIDATED" && got=1 && rm -f "$ZIP"
 fi
+[ -f "$SHELL_DIR/INSTALLATION_COMPLETE" ] && got=1
 if [ $got -eq 0 ]; then
   # same file on the npmmirror CDN: <host>/builds/chromium/<rev>/<zip>
   ALT_URL="https://cdn.npmmirror.com/binaries/playwright/${SHELL_URL#*/playwright/}"
