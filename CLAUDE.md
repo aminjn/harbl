@@ -60,6 +60,9 @@ deploy/wheels/     offline wheels (py3.10–3.13, x86_64) for servers without Py
 - Paging is automatic: a request with a `page=`-style param is followed until an empty/repeated page (cap `max_pages`, default 200); a GET without one gets `page=2,3…` probed. The record list's JSON path from page 1 is reused on later pages. Pages already fetched in a run are skipped (canonical URL).
 - Next.js `/_next/data/<buildId>/` URLs: on 404 the current buildId is read from the site's home page and the URL rewritten.
 - Records carry `source` (endpoint name, e.g. `specialties/cardio`) used for groups in the panel and in the grouped JSON export.
+- **Detail requests** (profile, phone behind login): at HAR import `har.detect_details` looks for requests whose URL path/query/JSON body contains a value (id, slug…) of another request's list records (from the HAR's own response bodies). They become `kind='detail'` with `url_template`/`body_template` (`{{field}}`), `detail_of` = family of that list. At run time lists run first, then each detail runs once per record of its list (`items.list_id`) that lacks it (`items.details_done` "[id][id]"), and its fields are merged into the record. List refreshes keep merged fields.
+- Requests can be edited (URL on the site's domain, e.g. other specialty/city), duplicated (copies keep `family`) and switched list↔detail in the panel.
+- Owner: panel already runs on https — do not bring up HTTPS again.
 - **Feed for the owner's own website**: `GET /feed/sites` and `GET /feed/sections/{id}?since=&limit=&offset=&source=` with `?key=` or `X-API-Key` (env `HARSCRAPER_FEED_KEY`, else random key in `DATA_DIR/feed_key.txt`). Read-only; not behind Basic auth.
 
 ## Likely production issues to check first

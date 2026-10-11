@@ -207,7 +207,10 @@ function renderCat(){
       در سایت فقط صفحه‌های «${esc(cat.name)}» را باز کنید (مثلاً لیست و صفحه ۲ آن)، HAR بگیرید و اینجا بدهید.<br><br>
       <button class="pri" onclick="$('#har-input').click()">انتخاب فایل HAR</button></div>`}
     <div class="sec" id="data"></div>
-    <details class="sec"><summary>درخواست‌های این بخش (${fa(cat.request_count)})</summary><div id="reqs"></div></details>
+    <details class="sec" id="reqs-box"><summary>درخواست‌ها و فیلترها (${fa(cat.request_count)})</summary>
+      <p class="note">«لیست» همه صفحه‌هایش گرفته می‌شود. «جزئیات» (مثل پروفایل یا شماره تماس) برای <b>تک‌تک</b> رکوردها تکرار و به همان ردیف اضافه می‌شود.
+      برای عوض کردن تخصص یا شهر، روی ✎ بزنید و همان قسمت آدرس را عوض کنید (مثلاً <span dir="ltr">geo-tehran</span> ← <span dir="ltr">geo-shiraz</span>)؛ با ⧉ یک کپی بسازید تا چند شهر/تخصص با هم گرفته شود.</p>
+      <div id="reqs"></div></details>
     <details class="sec" ontoggle="if(this.open)showFeed()"><summary>اتصال به سایت خودتان (API)</summary><div id="feed"></div></details>
     <details class="sec"><summary>تنظیمات بخش</summary>
       <div class="grid2">
@@ -234,19 +237,26 @@ async function clearItems(){if(!confirm('همه رکوردهای ذخیره‌ش
 async function sendHar(file){if(!cat)return;const fd=new FormData();fd.append('file',file);fd.append('replace',true);
   $('#har-stats').innerHTML='<p class="note">در حال آپلود و بررسی HAR…</p>';
   try{const s=(await api(`/api/categories/${cat.id}/har`,{method:'POST',body:fd})).stats;
-    let h=s.kept?`<p class="note" style="border-color:var(--ok)">${fa(s.kept)} درخواست داده پیدا شد. حالا «▶ گرفتن داده این بخش» را بزنید.</p>`
+    let h=s.kept?`<p class="note" style="border-color:var(--ok)">${fa(s.kept-(s.details||0))} درخواست لیست${s.details?` و ${fa(s.details)} درخواست جزئیات (برای هر رکورد تکرار می‌شود)`:''} پیدا شد. حالا «▶ گرفتن داده این بخش» را بزنید.</p>`
       :'<p class="note warn">در این فایل درخواستی که داده (JSON) برگرداند پیدا نشد. مطمئن شوید صفحه‌ها را بعد از باز کردن تب Network باز کرده‌اید.</p>';
     if(s.no_auth)h+='<p class="note warn">کوکی ورود در فایل نیست؛ اگر داده‌ها نیاز به لاگین دارند، در DevTools ← ⚙️ Settings ← Preferences ← Network گزینه <span dir="ltr">«Allow to generate HAR with sensitive data»</span> را روشن کنید و دوباره HAR بگیرید.</p>';
     await loadCats();$('#har-stats').innerHTML=h;loadSites()}
   catch(err){$('#har-stats').innerHTML=`<p class="note warn">آپلود ناموفق: ${esc(err.message)}</p>`}}
 
 async function loadReqs(){const rs=await api(`/api/categories/${cat.id}/requests`);
-  $('#reqs').innerHTML=rs.length?rs.map(r=>{const u=new URL(r.url);return `<div class="req">
+  $('#reqs').innerHTML=rs.length?rs.map(r=>{const u=new URL(r.url),det=r.kind==='detail',shown=det?dec(r.url_template.replace(/^https?:\/\/[^/]+/,'')):dec(u.pathname+u.search);
+    return `<div class="req">
     <input type="checkbox" style="width:auto" ${r.selected?'checked':''} onchange="patchReq(${r.id},{selected:this.checked})" title="فعال/غیرفعال">
-    <span class="m">${esc(r.method)}</span><span class="p" title="${esc(r.url)}">${esc(dec(u.pathname+u.search))}</span><span class="h">${esc(u.hostname)}</span>
+    <button class="tag ${det?'running':'ok'}" style="padding:0 8px;border:1px solid currentColor" ${r.url_template?`onclick="patchReq(${r.id},{kind:'${det?'list':'detail'}'})" title="تغییر نوع"`:'disabled'}>${det?'جزئیات هر رکورد':'لیست'}</button>
+    <span class="m">${esc(r.method)}</span><span class="p" title="${esc(r.url)}">${esc(shown)}</span>
+    ${det?'':`<button onclick="editReq(${r.id},this.dataset.u)" data-u="${esc(r.url)}" title="ویرایش آدرس (تخصص/شهر/...)">✎</button>`}
+    <button onclick="dupReq(${r.id})" title="کپی">⧉</button>
     <button class="bad" onclick="delReq(${r.id})" title="حذف">✕</button></div>`}).join(''):'<p class="note">درخواستی نیست.</p>'}
-async function patchReq(id,b){await jpost(`/api/requests/${id}`,b,'PATCH');loadCats()}
-async function delReq(id){await api(`/api/requests/${id}`,{method:'DELETE'});loadCats()}
+async function editReq(id,u){const v=prompt('آدرس جدید (فقط قسمت تخصص/شهر/فیلتر را عوض کنید):',dec(u));if(!v||v===dec(u))return;
+  try{await jpost(`/api/requests/${id}`,{url:new URL(v).href},'PATCH');toast('ذخیره شد');await loadCats();$('#reqs-box').open=true}catch(err){toast(err.message)}}
+async function dupReq(id){await api(`/api/requests/${id}/duplicate`,{method:'POST'});await loadCats();$('#reqs-box').open=true}
+async function patchReq(id,b){try{await jpost(`/api/requests/${id}`,b,'PATCH');await loadCats();$('#reqs-box').open=true}catch(err){toast(err.message)}}
+async function delReq(id){await api(`/api/requests/${id}`,{method:'DELETE'});await loadCats();$('#reqs-box').open=true}
 
 async function loadItems(){const d=await api(`/api/categories/${cat.id}/items?limit=${PAGE}&offset=${page*PAGE}&q=${encodeURIComponent(q)}&source=${encodeURIComponent(src)}`);
   const pages=Math.ceil(d.total/PAGE),qs=src?`&source=${encodeURIComponent(src)}`:'';

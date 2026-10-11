@@ -240,33 +240,71 @@ async def upload_har(cid: int, file: UploadFile = File(...), replace: bool = For
         cat = _get_cat(c, cid)
         site = _get_site(c, cat["site_id"])
         templates, stats = har.extract(data, site["allowed_domains"], api_only=True)
+        har.detect_details(templates)
+        stats["details"] = sum(t["kind"] == "detail" for t in templates)
         if replace:
             c.execute("DELETE FROM requests WHERE category_id=?", (cid,))
+        ids = []
         for t in templates:
-            c.execute("INSERT INTO requests(site_id,category_id,label,method,url,headers,body,selected,created_at) VALUES (?,?,?,?,?,?,?,1,?)",
-                      (site["id"], cid, t["label"], t["method"], t["url"], json.dumps(t["headers"], ensure_ascii=False), t["body"], db.now()))
+            ids.append(c.execute("""INSERT INTO requests(site_id,category_id,label,method,url,headers,body,kind,url_template,body_template,selected,created_at)
+                         VALUES (?,?,?,?,?,?,?,?,?,?,1,?)""",
+                      (site["id"], cid, t["label"], t["method"], t["url"], json.dumps(t["headers"], ensure_ascii=False), t["body"],
+                       t["kind"], t["url_template"], t["body_template"], db.now())).lastrowid)
+        for rid, t in zip(ids, templates):
+            of = ids[t["detail_of_index"]] if t["detail_of_index"] is not None else None
+            c.execute("UPDATE requests SET family=?, detail_of=? WHERE id=?", (rid, of, rid))
     return {"stats": stats}
 
 
 @app.get("/api/categories/{cid}/requests", dependencies=[Depends(auth)])
 def list_requests(cid: int):
     with db.conn() as c:
-        rows = [db.row(r) for r in c.execute("SELECT id, label, method, url, selected FROM requests WHERE category_id=? ORDER BY id", (cid,))]
+        rows = [db.row(r) for r in c.execute(
+            "SELECT id, label, method, url, selected, kind, url_template FROM requests WHERE category_id=? ORDER BY kind DESC, id", (cid,))]
     return rows
 
 
 class RequestPatch(BaseModel):
     selected: bool | None = None
     label: str | None = None
+    url: str | None = None      # e.g. change specialty / city in a list request
+    kind: str | None = None     # list | detail
+
+
+def _get_req(c, req_id):
+    r = db.row(c.execute("SELECT * FROM requests WHERE id=?", (req_id,)).fetchone())
+    if not r:
+        raise HTTPException(404, "درخواست پیدا نشد")
+    return r
 
 
 @app.patch("/api/requests/{req_id}", dependencies=[Depends(auth)])
 def patch_request(req_id: int, body: RequestPatch):
     with db.conn() as c:
+        r = _get_req(c, req_id)
         if body.selected is not None:
             c.execute("UPDATE requests SET selected=? WHERE id=?", (int(body.selected), req_id))
         if body.label is not None:
             c.execute("UPDATE requests SET label=? WHERE id=?", (body.label, req_id))
+        if body.url is not None:
+            site = _get_site(c, r["site_id"])
+            if not body.url.startswith(("http://", "https://")) or not har.host_allowed(body.url, site["allowed_domains"]):
+                raise HTTPException(400, "آدرس باید روی دامنه همین سایت باشد")
+            c.execute("UPDATE requests SET url=? WHERE id=?", (body.url, req_id))
+        if body.kind is not None:
+            if body.kind == "detail" and not r["url_template"]:
+                raise HTTPException(400, "در این آدرس شناسه‌ای از رکوردها پیدا نشد؛ نمی‌تواند «جزئیات» باشد")
+            c.execute("UPDATE requests SET kind=? WHERE id=?", ("detail" if body.kind == "detail" else "list", req_id))
+    return {"ok": True}
+
+
+@app.post("/api/requests/{req_id}/duplicate", dependencies=[Depends(auth)])
+def duplicate_request(req_id: int):
+    with db.conn() as c:
+        _get_req(c, req_id)
+        c.execute("""INSERT INTO requests(site_id,category_id,label,method,url,headers,body,kind,url_template,body_template,family,detail_of,selected,created_at)
+                     SELECT site_id,category_id,label,method,url,headers,body,kind,url_template,body_template,COALESCE(family,id),detail_of,selected,?
+                     FROM requests WHERE id=?""", (db.now(), req_id))
     return {"ok": True}
 
 

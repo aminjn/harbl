@@ -96,8 +96,16 @@ def init():
         for table in ("requests", "runs"):
             if "category_id" not in {r["name"] for r in c.execute(f"PRAGMA table_info({table})")}:
                 c.execute(f"ALTER TABLE {table} ADD COLUMN category_id INTEGER REFERENCES categories(id) ON DELETE CASCADE")
-        if "source" not in {r["name"] for r in c.execute("PRAGMA table_info(items)")}:
-            c.execute("ALTER TABLE items ADD COLUMN source TEXT")
+        for table, col, typ in (("items", "source", "TEXT"),
+                                ("items", "details_done", "TEXT NOT NULL DEFAULT '[]'"),  # detail requests already merged
+                                ("requests", "kind", "TEXT NOT NULL DEFAULT 'list'"),     # list | detail
+                                ("requests", "url_template", "TEXT"),                     # detail: /dr/{{id}}/...
+                                ("requests", "body_template", "TEXT"),
+                                ("requests", "family", "INTEGER"),      # original request id (copies share it)
+                                ("requests", "detail_of", "INTEGER"),   # detail: family of the list it belongs to
+                                ("items", "list_id", "INTEGER")):        # list request that produced the record
+            if col not in {r["name"] for r in c.execute(f"PRAGMA table_info({table})")}:
+                c.execute(f"ALTER TABLE {table} ADD COLUMN {col} {typ}")
         # Sections created when the default was a single page: collect all pages now
         c.execute("UPDATE categories SET max_pages=200 WHERE max_pages=1")
         # Requests imported before sections existed go to a default section

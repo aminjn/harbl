@@ -94,20 +94,61 @@ def _headers_for(site: dict, r: dict) -> dict:
     return _safe_headers(headers)
 
 
-def _save_records(category_id: int, records: list[dict], url: str) -> int:
+def _save_records(category_id: int, records: list[dict], url: str, list_id: int | None = None) -> int:
     """Upsert records; returns how many were new."""
     new, ts, source = 0, db.now(), extract.source_of(url)
     with db.conn() as c:
         for rec in records:
             flat = extract.flatten(rec)
             key = extract.record_key(rec)
-            cur = c.execute("UPDATE items SET data=?, source_url=?, source=?, last_seen=? WHERE category_id=? AND item_key=?",
-                            (json.dumps(flat, ensure_ascii=False), url, source, ts, category_id, key))
+            # Keep fields merged from detail requests (profile, phone) when the list row is refreshed
+            old = c.execute("SELECT data FROM items WHERE category_id=? AND item_key=?", (category_id, key)).fetchone()
+            if old:
+                flat = {**json.loads(old["data"]), **flat}
+            cur = c.execute("UPDATE items SET data=?, source_url=?, source=?, list_id=?, last_seen=? WHERE category_id=? AND item_key=?",
+                            (json.dumps(flat, ensure_ascii=False), url, source, list_id, ts, category_id, key))
             if cur.rowcount == 0:
-                c.execute("INSERT INTO items(category_id, item_key, data, source_url, source, first_seen, last_seen) VALUES (?,?,?,?,?,?,?)",
-                          (category_id, key, json.dumps(flat, ensure_ascii=False), url, source, ts, ts))
+                c.execute("INSERT INTO items(category_id, item_key, data, source_url, source, list_id, first_seen, last_seen) VALUES (?,?,?,?,?,?,?,?)",
+                          (category_id, key, json.dumps(flat, ensure_ascii=False), url, source, list_id, ts, ts))
                 new += 1
     return new
+
+
+def _fill(template: str, rec: dict, for_url: bool = False) -> str | None:
+    """Put a record's values into a {{field}} template; None if a field is missing."""
+    missing = False
+
+    def val(m, quoted):
+        nonlocal missing
+        v = rec.get(m.group(1))
+        if v in (None, ""):
+            missing = True
+            return ""
+        if quoted:  # JSON body: keep numbers as numbers
+            return json.dumps(v, ensure_ascii=False)
+        return quote(str(v), safe="") if for_url else str(v)
+
+    out = re.sub(r'"\{\{([^{}]+)\}\}"', lambda m: val(m, True), template) if not for_url else template
+    out = re.sub(r"\{\{([^{}]+)\}\}", lambda m: val(m, False), out)
+    return None if missing else out
+
+
+def _merge_detail(item_id: int, request_id: int, data) -> None:
+    """Add a detail response's fields (profile, phone, ...) to the record."""
+    if isinstance(data, dict):
+        main = data.get("pageProps", data.get("data", data))
+        main = main if isinstance(main, dict) else {"value": main}
+    else:
+        main = {"value": data}
+    extra = {k: v for k, v in extract.flatten(main).items() if v not in (None, "", "[]", "{}")}
+    with db.conn() as c:
+        row = c.execute("SELECT data, details_done FROM items WHERE id=?", (item_id,)).fetchone()
+        rec = json.loads(row["data"])
+        rec.update(extra)
+        done = [int(x) for x in re.findall(r"\[(\d+)\]", row["details_done"] or "")] + [request_id]
+        # details_done is stored as "[1][5]" style text so a LIKE '%[id]%' finds it
+        c.execute("UPDATE items SET data=?, details_done=? WHERE id=?",
+                  (json.dumps(rec, ensure_ascii=False), "".join(f"[{i}]" for i in sorted(set(done))) , item_id))
 
 
 def run_category(category_id: int, trigger: str = "manual") -> dict:
@@ -122,7 +163,7 @@ def run_category(category_id: int, trigger: str = "manual") -> dict:
             "INSERT INTO runs(site_id, category_id, started_at, status, trigger, message) VALUES (?,?,?,?,?,?)",
             (site["id"], category_id, db.now(), "running", trigger, "شروع…")).lastrowid
 
-    results, ok, fail, message, records_total, records_new = [], 0, 0, None, 0, 0
+    results, ok, fail, message, records_total, records_new, detailed = [], 0, 0, None, 0, 0, 0
     build_ids: dict[str, str] = {}  # old Next.js build id -> current one
     fetched: set[tuple] = set()      # pages already fetched in this run (HAR often holds page 1 and 2)
     sent = 0
@@ -130,67 +171,79 @@ def run_category(category_id: int, trigger: str = "manual") -> dict:
     def progress():
         with db.conn() as c:
             c.execute("UPDATE runs SET ok_count=?, fail_count=?, message=? WHERE id=?",
-                      (ok, fail, f"{sent} صفحه گرفته شد · {records_total} رکورد ({records_new} جدید)", run_id))
+                      (ok, fail, f"{sent} درخواست · {records_total} رکورد ({records_new} جدید)"
+                                 + (f" · جزئیات {detailed} رکورد" if detailed else ""), run_id))
+
+    def fetch(client, r, url, body):
+        """One request with contract check, delay and Next.js build-id refresh. Returns (item, data) or (item, None)."""
+        nonlocal sent, ok, fail
+        m = NEXT_DATA.search(url)
+        if m and m.group(1) in build_ids:
+            url = url.replace(m.group(0), f"/_next/data/{build_ids[m.group(1)]}/")
+        item = {"request_id": r["id"], "label": r["label"], "method": r["method"], "url": url}
+        results.append(item)
+        # Hard guarantee: never contact a host outside the contract
+        if not host_allowed(url, site["allowed_domains"]):
+            item.update(error="دامنه خارج از قرارداد است؛ ارسال نشد")
+            fail += 1
+            return item, None
+        if sent:
+            time.sleep(max(site["delay_seconds"], 0))
+        sent += 1
+        headers = _headers_for(site, r)
+        content = body.encode() if body else None
+        t0 = time.monotonic()
+        try:
+            resp = client.request(r["method"], url, headers=headers, content=content)
+            m = NEXT_DATA.search(url)
+            if resp.status_code == 404 and m:
+                new_id = _fresh_build_id(client, url, headers)
+                if new_id and new_id != m.group(1):
+                    build_ids[m.group(1)] = new_id
+                    url = url.replace(m.group(0), f"/_next/data/{new_id}/")
+                    item["url"] = url
+                    resp = client.request(r["method"], url, headers=headers, content=content)
+            if len(resp.content) > MAX_RESPONSE_BYTES:
+                raise ValueError("پاسخ بزرگ‌تر از حد مجاز است")
+            data = _parse_body(resp)
+        except Exception as e:  # network / timeout / size
+            item.update(error=str(e))
+            fail += 1
+            return item, None
+        item.update(status=resp.status_code, elapsed_ms=round((time.monotonic() - t0) * 1000))
+        if resp.status_code in (401, 403):
+            item["warning"] = "احتمالاً نشست (کوکی/توکن) منقضی شده یا لاگین لازم است؛ HAR جدید با کوکی آپلود کنید"
+        if not 200 <= resp.status_code < 300:
+            item["error_body"] = str(data)[:300]
+            return item, None
+        ok += 1
+        return item, data
 
     try:
         check_contract(site)
         if not reqs:
             raise ScrapeBlocked("هیچ درخواستی در این بخش نیست؛ HAR این بخش را آپلود کنید")
+        lists = [r for r in reqs if r.get("kind") != "detail"]
+        details = [r for r in reqs if r.get("kind") == "detail" and r.get("url_template")]
         with httpx.Client(timeout=REQUEST_TIMEOUT, follow_redirects=False) as client:
-            for r in reqs:
-                headers = _headers_for(site, r)
+            # 1) list requests, every page
+            for r in lists:
                 page = _page_param(r["url"])
                 pname, pnum = page or ("page", 1)
                 url, prev_keys, pages, rec_path = r["url"], None, 0, None
                 while True:
-                    m = NEXT_DATA.search(url)
-                    if m and m.group(1) in build_ids:
-                        url = url.replace(m.group(0), f"/_next/data/{build_ids[m.group(1)]}/")
                     page_key = (r["method"], _canonical(url), r["body"])
                     if page_key in fetched:
                         break
                     fetched.add(page_key)
-                    if sent:
-                        time.sleep(max(site["delay_seconds"], 0))
-                    item = {"request_id": r["id"], "label": r["label"], "method": r["method"], "url": url}
-                    results.append(item)
-                    # Hard guarantee: never contact a host outside the contract
-                    if not host_allowed(url, site["allowed_domains"]):
-                        item.update(error="دامنه خارج از قرارداد است؛ ارسال نشد")
-                        fail += 1
-                        break
-                    sent += 1
-                    t0 = time.monotonic()
-                    try:
-                        body = r["body"].encode() if r["body"] else None
-                        resp = client.request(r["method"], url, headers=headers, content=body)
-                        m = NEXT_DATA.search(url)
-                        if resp.status_code == 404 and m:
-                            new_id = _fresh_build_id(client, url, headers)
-                            if new_id and new_id != m.group(1):
-                                build_ids[m.group(1)] = new_id
-                                url = url.replace(m.group(0), f"/_next/data/{new_id}/")
-                                item["url"] = url
-                                resp = client.request(r["method"], url, headers=headers, content=body)
-                        if len(resp.content) > MAX_RESPONSE_BYTES:
-                            raise ValueError("پاسخ بزرگ‌تر از حد مجاز است")
-                        data = _parse_body(resp)
-                        item.update(status=resp.status_code, elapsed_ms=round((time.monotonic() - t0) * 1000))
-                    except Exception as e:  # network / timeout / size
-                        item.update(error=str(e))
-                        fail += 1
-                        break
-                    if resp.status_code in (401, 403):
-                        item["warning"] = "احتمالاً نشست (کوکی/توکن) منقضی شده؛ HAR جدید آپلود کنید"
-                    if not 200 <= resp.status_code < 300:
-                        item["error_body"] = str(data)[:300]
+                    item, data = fetch(client, r, url, r["body"])
+                    if data is None:
                         # A probed extra page that the site rejects just means there are no more pages
-                        if pages == 0:
+                        if pages and "status" in item:
+                            results.remove(item)
+                        elif "error" not in item:
                             fail += 1
-                        else:
-                            results.pop()
                         break
-                    ok += 1
                     records, rec_path = extract.find_records(data, rec_path) if isinstance(data, (dict, list)) else ([], rec_path)
                     keys = [extract.record_key(x) for x in records]
                     item["records"] = len(records)
@@ -199,16 +252,37 @@ def run_category(category_id: int, trigger: str = "manual") -> dict:
                     prev_keys = keys
                     pages += 1
                     records_total += len(records)
-                    records_new += _save_records(category_id, records, url)
+                    records_new += _save_records(category_id, records, url, r["id"])
                     progress()
                     # Next page: follow the page parameter, or try adding one (GET only)
                     if pages >= cat["max_pages"] or (not page and r["method"] != "GET"):
                         break
                     url = _with_page(url, pname, pnum + pages)
+            # 2) detail requests (profile, phone, ...), once per record that does not have them yet
+            for r in details:
+                with db.conn() as c:
+                    # only records of the list this detail belongs to (not e.g. the city list)
+                    todo = [(row["id"], json.loads(row["data"])) for row in c.execute(
+                        """SELECT id, data FROM items WHERE category_id=? AND details_done NOT LIKE ?
+                           AND (? IS NULL OR list_id IN (SELECT id FROM requests WHERE COALESCE(family, id)=?))""",
+                        (category_id, f'%[{r["id"]}]%', r.get("detail_of"), r.get("detail_of")))]
+                for item_id, rec in todo:
+                    url = _fill(r["url_template"], rec, for_url=True)
+                    body = _fill(r["body_template"], rec) if r.get("body_template") else r["body"]
+                    if url is None or (r.get("body_template") and body is None):
+                        continue  # this record lacks the id/slug the template needs
+                    item, data = fetch(client, r, url, body)
+                    if data is None:
+                        if "error" not in item:
+                            fail += 1
+                        continue
+                    detailed += 1
+                    _merge_detail(item_id, r["id"], data)
+                    progress()
         with db.conn() as c:
             total = c.execute("SELECT COUNT(*) FROM items WHERE category_id=?", (category_id,)).fetchone()[0]
         status = "ok" if fail == 0 else ("partial" if ok else "failed")
-        message = f"{records_total} رکورد از {sent} صفحه ({records_new} جدید) · مجموع این بخش: {total}"
+        message = f"{records_total} رکورد از {sent} درخواست ({records_new} جدید{f'، {detailed} جزئیات' if detailed else ''}) · مجموع این بخش: {total}"
     except ScrapeBlocked as e:
         status, message = "failed", str(e)
     except Exception as e:  # never leave a run stuck in "running"
