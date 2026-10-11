@@ -13,6 +13,7 @@ Section config (categories.config, mode='visual'):
 """
 import hashlib
 import json
+import re
 import time
 from pathlib import Path
 from urllib.parse import urlparse
@@ -25,9 +26,12 @@ SESSIONS = DATA_DIR / "sessions"
 
 # Runs in the page. Returns what is under (x, y) and selectors that find it again.
 PICK_JS = r"""
-([x, y, where, itemSel, attr]) => {
+([x, y, where, itemSel, attr, up]) => {
   let el = document.elementFromPoint(x, y);
   if (!el) return {error: 'چیزی زیر این نقطه نیست'};
+  // "bigger": the surrounding box, `up` levels higher (never past the list card)
+  const card0 = where === 'list' && itemSel ? el.closest(itemSel) : null;
+  for (let i = 0; i < (up || 0) && el.parentElement && el !== card0 && el.parentElement !== document.body; i++) el = el.parentElement;
   if (attr === 'href' || attr === 'click') el = el.closest('a,button,[role=button],[onclick]') || el;
   if (attr === 'src') el = el.closest('img') || el.querySelector?.('img') || el;
   const esc = CSS.escape;
@@ -96,6 +100,43 @@ DETAIL_JS = r"""
               : (e.innerText || e.textContent || '').trim().replace(/\s+/g, ' '); }
   return o; }
 """
+
+
+FA_DIGITS = str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "01234567890123456789")
+
+
+def clean(value, f: dict):
+    """The field's text edits: keep text after/before a marker, remove words, replace words, digits."""
+    if not isinstance(value, str):
+        return value
+    v = value
+    if f.get("after") and f["after"] in v:
+        v = v.split(f["after"], 1)[1]
+    if f.get("before") and f["before"] in v:
+        v = v.split(f["before"], 1)[0]
+    for w in f.get("remove") or []:
+        if w:
+            v = v.replace(w, "")
+    for pair in f.get("replace") or []:
+        if len(pair) == 2 and pair[0]:
+            v = v.replace(pair[0], pair[1])
+    if f.get("digits") == "en":
+        v = v.translate(FA_DIGITS)
+    return re.sub(r"\s+", " ", v).strip(" :،,-–|")
+
+
+def output_row(row: dict, cfg: dict) -> dict:
+    """A stored (raw) record as shown/exported: picked fields in order, each field's edits, then the section's rules."""
+    rules = [r for r in cfg.get("rules") or [] if len(r) == 2 and r[0]]
+    out = {}
+    for f in cfg.get("fields", []):
+        v = clean(row.get(f["name"]), f)
+        if isinstance(v, str):
+            for a, b in rules:
+                v = v.replace(a, b)
+            v = v.strip()
+        out[f["name"]] = v
+    return out
 
 
 def session_file(category_id: int) -> Path:

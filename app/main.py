@@ -243,6 +243,7 @@ class VisualIn(BaseModel):
     fields: list[dict] = []
     detail_link: str | None = None
     detail_click: str | None = None
+    rules: list[list[str]] = []     # [[word, replacement], ...] applied to every field
 
 
 @app.put("/api/categories/{cid}/visual", dependencies=[Depends(auth)])
@@ -254,10 +255,12 @@ def save_visual(cid: int, body: VisualIn):
         url = body.list_url.strip()
         if url and not (url.startswith(("http://", "https://")) and har.host_allowed(url.replace("{page}", "1"), site["allowed_domains"])):
             raise HTTPException(400, "آدرس لیست باید روی دامنه همین سایت باشد (با http/https)")
-        fields = [{k: f.get(k) for k in ("name", "page", "attr", "rel", "rel_tags", "selector", "count", "sample")}
+        fields = [{k: f.get(k) for k in ("name", "page", "attr", "rel", "rel_tags", "selector", "count", "sample", "raw",
+                                         "after", "before", "remove", "replace", "digits")}
                   for f in body.fields if str(f.get("name") or "").strip()]
         cfg = {"list_url": url, "max_pages": body.max_pages, "item_selector": body.item_selector, "fields": fields,
-               "detail_link": body.detail_link or None, "detail_click": body.detail_click or None}
+               "detail_link": body.detail_link or None, "detail_click": body.detail_click or None,
+               "rules": [[str(a), str(b)] for a, b in (r[:2] for r in body.rules if len(r) >= 2) if str(a)]}
         # the picked fields are the output, so no separate field choice
         c.execute("UPDATE categories SET config=?, mode='visual', fields='[]' WHERE id=?", (json.dumps(cfg, ensure_ascii=False), cid))
         return _cat_out(_get_cat(c, cid))
@@ -312,6 +315,7 @@ class RecPick(BaseModel):
     where: str = "list"            # list | detail
     item_selector: str | None = None
     attr: str = "text"             # text | href | src | click
+    up: int = 0                    # pick the surrounding box this many levels up
 
 
 class RecStop(BaseModel):
@@ -360,7 +364,7 @@ async def recorder_input(ev: dict):
 @app.post("/api/recorder/pick", dependencies=[Depends(auth)])
 async def recorder_pick(body: RecPick):
     try:
-        return await recorder.pick(body.x, body.y, body.where, body.item_selector, body.attr)
+        return await recorder.pick(body.x, body.y, body.where, body.item_selector, body.attr, body.up)
     except RecorderError as e:
         raise HTTPException(409, str(e))
     except Exception as e:
@@ -458,6 +462,18 @@ def _fields(cat: dict) -> list[dict]:
         return []
 
 
+def _shaper(cat: dict):
+    """Function turning a stored record into its output form for this section."""
+    if cat.get("mode") == "visual":
+        try:
+            cfg = json.loads(cat.get("config") or "{}")
+        except ValueError:
+            cfg = {}
+        return lambda row: visual.output_row(row, cfg)
+    fields = _fields(cat)
+    return lambda row: _project(row, fields)
+
+
 def _project(row: dict, fields: list[dict]) -> dict:
     """Only the chosen fields, under their chosen names, in the chosen order (all fields when none chosen)."""
     if not fields:
@@ -515,7 +531,8 @@ def list_items(cid: int, q: str = "", source: str = "", limit: int = 50, offset:
             f"SELECT data FROM items WHERE {where} ORDER BY id LIMIT ? OFFSET ?", args + [min(limit, 500), offset])]
     fields = _fields(cat)
     if fields:
-        rows = [_project(r, fields) for r in rows]
+        shape = _shaper(cat)
+        rows = [shape(r) for r in rows]
         return {"total": total, "groups": groups, "columns": [f.get("label") or f["key"] for f in fields], "rows": rows, "chosen": True}
     return {"total": total, "groups": groups, "columns": _columns(rows, 8), "rows": rows, "chosen": False}
 
@@ -538,17 +555,17 @@ def export_items(cid: int, fmt: str = "json", source: str = ""):
             args.append(source)
         rows = c.execute(sql + " ORDER BY id", args).fetchall()
     name = f"{site['name']}-{cat['name']}" + (f"-{source.replace('/', '_')}" if source else "")
-    fields = _fields(cat)
+    fields, shape = _fields(cat), _shaper(cat)
     if fmt == "json":
         groups: dict[str, list] = {}
         for r in rows:
-            groups.setdefault(r["source"] or "—", []).append(_project(json.loads(r["data"]), fields))
+            groups.setdefault(r["source"] or "—", []).append(shape(json.loads(r["data"])))
         doc = {"site": site["name"], "section": cat["name"], "contract_ref": site["contract_ref"],
                "generated_at": db.now(), "total": len(rows),
                "groups": [{"source": k, "count": len(v), "items": v} for k, v in groups.items()]}
         body, media, ext = json.dumps(doc, ensure_ascii=False, indent=2).encode(), "application/json", "json"
     else:
-        items = [dict(_project(json.loads(r["data"]), fields), _source=r["source"], _first_seen=r["first_seen"], _last_seen=r["last_seen"])
+        items = [dict(shape(json.loads(r["data"])), _source=r["source"], _first_seen=r["first_seen"], _last_seen=r["last_seen"])
                  for r in rows]
         buf = io.StringIO()
         chosen = [f.get("label") or f["key"] for f in fields] or [k for k in _columns(items) if not k.startswith("_")]
@@ -666,6 +683,7 @@ def feed_section(cid: int, since: str = "", source: str = "", limit: int = Query
             where += " AND source=?"
             args.append(source)
         total = c.execute(f"SELECT COUNT(*) FROM items WHERE {where}", args).fetchone()[0]
+        shape = _shaper(cat)
         rows = c.execute(f"SELECT item_key, source, first_seen, last_seen, data FROM items WHERE {where} ORDER BY id LIMIT ? OFFSET ?",
                          args + [limit, offset]).fetchall()
     return {
@@ -674,7 +692,7 @@ def feed_section(cid: int, since: str = "", source: str = "", limit: int = Query
         "total": total, "offset": offset,
         "next_offset": offset + len(rows) if offset + len(rows) < total else None,
         "items": [{"key": r["item_key"], "source": r["source"], "first_seen": r["first_seen"],
-                   "last_seen": r["last_seen"], "data": _project(json.loads(r["data"]), _fields(cat))} for r in rows],
+                   "last_seen": r["last_seen"], "data": shape(json.loads(r["data"]))} for r in rows],
     }
 
 

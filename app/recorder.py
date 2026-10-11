@@ -124,10 +124,10 @@ class Recorder:
         elif kind == "reload":
             await page.reload(wait_until="domcontentloaded")
 
-    async def pick(self, x: float, y: float, where: str, item_selector: str | None, attr: str) -> dict:
-        """What is under (x, y), with selectors to find it again (see visual.PICK_JS)."""
+    async def pick(self, x: float, y: float, where: str, item_selector: str | None, attr: str, up: int = 0) -> dict:
+        """What is under (x, y) (or the box `up` levels around it), with selectors to find it again (see visual.PICK_JS)."""
         page = self._page()
-        return await page.evaluate(visual.PICK_JS, [x, y, where, item_selector or None, attr])
+        return await page.evaluate(visual.PICK_JS, [x, y, where, item_selector or None, attr, max(int(up), 0)])
 
     async def stop(self, save: bool = True) -> tuple[int | None, bytes | None]:
         """Close the browser; returns (category_id, HAR bytes) when saving."""

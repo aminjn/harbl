@@ -269,10 +269,36 @@ function vLoad(){const c=cat.config||{};const fields=(c.fields||[]).map(f=>({...
   const li=fields.findIndex(f=>f.name===c.detail_link);
   vcfg={list_url:c.list_url||'',max_pages:c.max_pages||200,item_selector:c.item_selector||'',
     link:li>=0?fields.splice(li,1)[0]:null,click:c.detail_click?{selector:c.detail_click,sample:''}:null,
-    fields:fields.length?fields:[{name:'نام',page:'list',attr:'text'}]}}
+    fields:fields.length?fields:[{name:'نام',page:'list',attr:'text'}],rules:c.rules||[]}}
 function vReady(){return vcfg&&vcfg.list_url&&vcfg.item_selector&&vcfg.fields.some(f=>f.page==='list'&&f.rel)}
+const FA_D='۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩';
+function vClean(v,f){if(typeof v!=='string')return v;
+  if(f.after&&v.includes(f.after))v=v.split(f.after).slice(1).join(f.after);
+  if(f.before&&v.includes(f.before))v=v.split(f.before)[0];
+  for(const w of f.remove||[])if(w)v=v.split(w).join('');
+  for(const [a,b] of f.replace||[])if(a)v=v.split(a).join(b);
+  if(f.digits==='en')v=v.replace(/[۰-۹٠-٩]/g,d=>FA_D.indexOf(d)%10);
+  v=v.replace(/\s+/g,' ').replace(/^[\s:،,\-–|]+|[\s:،,\-–|]+$/g,'');
+  for(const [a,b] of vcfg.rules||[])if(a)v=v.split(a).join(b);
+  return v.trim()}
+const parsePairs=t=>t.split('\n').map(l=>{const i=l.indexOf('=');return i>0?[l.slice(0,i).trim(),l.slice(i+1).trim()]:null}).filter(x=>x&&x[0]);
+const pairsText=ps=>(ps||[]).map(([a,b])=>`${a} = ${b}`).join('\n');
+let vEdit=-1;
+function vEditor(i){const f=vcfg.fields[i];const raw=f.raw??f.sample??'';
+  return `<div class="frow" style="display:block;background:var(--bg)">
+    <div class="grid2">
+      <div><label>فقط متنِ بعد از این کلمه</label><input type="text" value="${esc(f.after||'')}" placeholder="مثلاً  کد نظام پزشکی" oninput="vcfg.fields[${i}].after=this.value;vPrev(${i})"></div>
+      <div><label>فقط متنِ قبل از این کلمه</label><input type="text" value="${esc(f.before||'')}" oninput="vcfg.fields[${i}].before=this.value;vPrev(${i})"></div>
+      <div><label>حذف این کلمه‌ها (با ، جدا کنید)</label><input type="text" value="${esc((f.remove||[]).join('، '))}" placeholder="مثلاً  تخصص، دکتر" oninput="vcfg.fields[${i}].remove=this.value.split(/[،,]/).map(x=>x.trim()).filter(Boolean);vPrev(${i})"></div>
+      <div><label>جایگزینی (هر خط: کلمه = جایگزین)</label><textarea rows="2" oninput="vcfg.fields[${i}].replace=parsePairs(this.value);vPrev(${i})">${esc(pairsText(f.replace))}</textarea></div>
+    </div>
+    <label><input type="checkbox" style="width:auto" ${f.digits==='en'?'checked':''} onchange="vcfg.fields[${i}].digits=this.checked?'en':'';vPrev(${i})"> عددهای فارسی به انگلیسی (برای تلفن و کد)</label>
+    <p class="note" style="margin:6px 0 0">نمونه: <span dir="auto">${esc(raw||'— هنوز انتخاب نشده')}</span><br>نتیجه: <b id="v-prev-${i}" dir="auto">${esc(vClean(raw,f)||'—')}</b></p>
+    <div class="row" style="margin-top:6px"><button class="pri" onclick="vEdit=-1;vRender();vSave()">تأیید</button></div></div>`}
+function vPrev(i){const f=vcfg.fields[i],e=$('#v-prev-'+i);if(e)e.textContent=vClean(f.raw??f.sample??'',f)||'—'}
 function vStatus(f,where){const ok=where==='list'?f.rel:f.selector;
-  return ok?`<span class="ok">✓</span> <small title="${esc(f.sample)}">${f.count?esc(f.count)+' · ':''}${esc((f.sample||'').slice(0,40))}</small>`:'<small class="failed">هنوز انتخاب نشده</small>'}
+  const shown=vClean(f.raw??f.sample??'',f);
+  return ok?`<span class="ok">✓</span> <small title="${esc(shown)}">${f.count?esc(f.count)+' · ':''}${esc((shown||'').slice(0,40))}</small>`:'<small class="failed">هنوز انتخاب نشده</small>'}
 function vRender(){if(!$('#vis'))return;const needDetail=vcfg.fields.some(f=>f.page==='detail');
   $('#vis').innerHTML=`
   <div class="step"><b class="n">۱</b>آدرس صفحه لیست
@@ -281,13 +307,17 @@ function vRender(){if(!$('#vis'))return;const needDetail=vcfg.fields.some(f=>f.p
     <small class="note" style="display:block;margin-top:6px">صفحه لیست را در مرورگر خودتان باز کنید، به صفحه ۲ بروید و آدرس را کپی کنید؛ بعد جای عدد ۲ بنویسید <code dir="ltr">{page}</code>. سامانه صفحه ۱، ۲، ۳… را تا وقتی مورد دارد می‌گیرد.</small>
   </div>
   <div class="step"><b class="n">۲</b>چه اطلاعاتی می‌خواهید؟ (اسم بگذارید و بگویید کجاست)
-    <div style="margin-top:6px">${vcfg.fields.map((f,i)=>`<div class="frow" style="grid-template-columns:minmax(0,1fr) 150px 90px minmax(0,1.3fr) 30px">
+    <div style="margin-top:6px">${vcfg.fields.map((f,i)=>`<div class="frow" style="grid-template-columns:minmax(0,1fr) 190px 90px minmax(0,1.3fr) 30px 30px">
       <input type="text" value="${esc(f.name)}" placeholder="مثلاً نام، تخصص، تلفن" oninput="vcfg.fields[${i}].name=this.value">
       <select onchange="vcfg.fields[${i}].page=this.value;vRender()">${Object.entries(WHERE).map(([k,v])=>`<option value="${k}" ${f.page===k?'selected':''}>${v}</option>`).join('')}</select>
       <select onchange="vcfg.fields[${i}].attr=this.value">${Object.entries(ATTR).map(([k,v])=>`<option value="${k}" ${f.attr===k?'selected':''}>${v}</option>`).join('')}</select>
-      <span>${vStatus(f,f.page)}</span><button class="bad" onclick="vcfg.fields.splice(${i},1);vRender()" title="حذف">✕</button></div>`).join('')}
+      <span>${vStatus(f,f.page)}</span><button onclick="vEdit=vEdit===${i}?-1:${i};vRender()" title="ویرایش متن (حذف/جایگزینی کلمه)">✎</button><button class="bad" onclick="vcfg.fields.splice(${i},1);vEdit=-1;vRender()" title="حذف">✕</button></div>${vEdit===i?vEditor(i):''}`).join('')}
     </div>
     <button style="margin-top:6px" onclick="vcfg.fields.push({name:'',page:'list',attr:'text'});vRender()">+ اطلاعات جدید</button>
+    <details style="margin-top:8px" ${(vcfg.rules||[]).length?'open':''}><summary>قانون جایگزینی برای همه اطلاعات این بخش (${fa((vcfg.rules||[]).length)})</summary>
+      <label>هر خط یک قانون: <b>کلمه = جایگزین</b> — هر جا این کلمه بود، با جایگزینش عوض می‌شود (جایگزین خالی = حذف)</label>
+      <textarea rows="3" placeholder="متخصص = تخصص&#10;ي = ی&#10;ك = ک" oninput="vcfg.rules=parsePairs(this.value);vcfg.fields.forEach((f,i)=>vPrev(i))" onchange="vSave(true)">${esc(pairsText(vcfg.rules))}</textarea>
+      <small class="note" style="display:block;margin-top:4px">این قانون‌ها و ویرایش‌های ✎ روی همه داده‌های قبلی هم فوراً اعمال می‌شوند؛ لازم نیست دوباره جمع‌آوری کنید.</small></details>
     ${needDetail?`<div class="frow" style="grid-template-columns:minmax(0,1fr) minmax(0,1.3fr);margin-top:8px"><b>🔗 لینک صفحه جزئیات هر مورد</b><span>${vcfg.link?vStatus(vcfg.link,'list'):'<small class="failed">برای «صفحه جزئیات» لازم است: در صفحه لیست روی اسم/عکس یک مورد که به صفحه‌اش می‌رود انتخاب کنید</small>'}</span></div>
       <div class="frow" style="grid-template-columns:minmax(0,1fr) minmax(0,1.3fr) 30px"><b>🔘 دکمه قبل از خواندن جزئیات <small>(اختیاری؛ مثل «نمایش شماره»)</small></b><span>${vcfg.click?'<span class="ok">✓</span> انتخاب شد':'<small>ندارد</small>'}</span>${vcfg.click?'<button class="bad" onclick="vcfg.click=null;vRender()">✕</button>':''}</div>`:''}
   </div>
@@ -298,9 +328,10 @@ function vRender(){if(!$('#vis'))return;const needDetail=vcfg.fields.some(f=>f.p
 function vPayload(){const fields=vcfg.fields.filter(f=>f.name.trim()).map(f=>({...f,name:f.name.trim()}));
   if(vcfg.link&&fields.some(f=>f.page==='detail'))fields.push({...vcfg.link,name:'لینک صفحه',page:'list',attr:'href'});
   return {list_url:vcfg.list_url,max_pages:vcfg.max_pages,item_selector:vcfg.item_selector,fields,
-    detail_link:vcfg.link&&fields.some(f=>f.page==='detail')?'لینک صفحه':null,detail_click:vcfg.click?.selector||null}}
+    detail_link:vcfg.link&&fields.some(f=>f.page==='detail')?'لینک صفحه':null,detail_click:vcfg.click?.selector||null,rules:vcfg.rules||[]}}
 async function vSave(quiet){try{const c=await jpost(`/api/categories/${cat.id}/visual`,vPayload(),'PUT');
-    cat.config=c.config;if(!quiet)toast('ذخیره شد');const b=$('#btn-run');if(b)b.disabled=!vReady()}catch(err){toast(err.message)}}
+    cat.config=c.config;if(!quiet)toast('ذخیره شد');const b=$('#btn-run');if(b)b.disabled=!vReady();
+    if($('#data')&&cat.item_count)loadItems()}catch(err){toast(err.message)}}
 async function vOpen(){await vSave(true);
   const url=vcfg.list_url?vcfg.list_url.replace('{page}','1'):`https://${cur.allowed_domains[0]}/`;toast('در حال باز کردن مرورگر…');
   try{const r=await jpost(`/api/categories/${cat.id}/recorder/start`,{url,record_har:false});if(r.warning)toast('صفحه کامل باز نشد؛ ادامه دهید');recOpen(r.url)}
@@ -309,18 +340,24 @@ async function vOpen(){await vSave(true);
 function vBar(){const bar=$('#rec-pick');if(!vcfg||cat?.mode!=='visual'){bar.innerHTML='';return}
   const chip=(key,label,done)=>`<button class="chip ${vArm===key?'on':''}" onclick="vArmSet('${key}')">${done?'✓ ':'🎯 '}${esc(label)}</button>`;
   const needDetail=vcfg.fields.some(f=>f.page==='detail');
+  const lastName=vLast&&(vLast.k==='link'?'لینک':vLast.k==='click'?'دکمه':vcfg.fields[+vLast.k.slice(1)]?.name);
+  const size=vLast&&!vArm&&vLast.k!=='click'?`<span style="margin-inline-start:12px">کادر «${esc(lastName||'')}»: <button onclick="vResize(1)" title="کادر دربرگیرنده">⬆ بزرگ‌تر</button><button onclick="vResize(-1)">⬇ کوچک‌تر</button></span>`:'';
   bar.innerHTML=`<span>${vArm?'<b>حالا روی همان چیز در صفحه کلیک کنید</b> (برای لغو دوباره روی دکمه بزنید)':'انتخاب کنید: '}</span>`
     +vcfg.fields.map((f,i)=>f.name.trim()?chip('f'+i,f.name+(f.page==='detail'?' (جزئیات)':''),f.page==='list'?f.rel:f.selector):'').join('')
-    +(needDetail?chip('link','لینک صفحه جزئیات',vcfg.link?.rel)+chip('click','دکمه نمایش (اختیاری)',vcfg.click):'')}
+    +(needDetail?chip('link','لینک صفحه جزئیات',vcfg.link?.rel)+chip('click','دکمه نمایش (اختیاری)',vcfg.click):'')+size}
 function vArmSet(k){vArm=vArm===k?null:k;vBar()}
 // is the remote browser on the list page (same address as the list URL, any page number)?
 function onListPage(){const u=$('#rec-url').value;if(!vcfg.list_url)return null;
   try{const a=new URL(u),b=new URL(vcfg.list_url.replace('{page}','1'));
     return a.host.replace(/^www\./,'')===b.host.replace(/^www\./,'')&&decodeURIComponent(a.pathname).replace(/\/$/,'')===decodeURIComponent(b.pathname).replace(/\/$/,'')}catch{return null}}
-async function vPick(x,y){const k=vArm;vArm=null;
+let vLast=null;  // last pick: {k,x,y,up} for the bigger/smaller buttons
+async function vResize(d){if(!vLast)return;const up=Math.max(0,vLast.up+d);if(up===vLast.up&&d<0)return toast('کوچک‌تر از این نمی‌شود');
+  vArm=vLast.k;await vPick(vLast.x,vLast.y,up)}
+async function vPick(x,y,up=0){const k=vArm;vArm=null;const again=up>0||vLast?.k===k&&vLast?.x===x&&vLast?.y===y;
   const f=k==='link'?{page:'list',attr:'href'}:k==='click'?{page:'detail',attr:'click'}:vcfg.fields[+k.slice(1)];
-  const onList=onListPage();
-  if(f.page==='list'&&!vcfg.list_url){
+  const onList=again?null:onListPage();
+  if(again){}
+  else if(f.page==='list'&&!vcfg.list_url){
     if(!confirm('آدرس صفحه لیست هنوز خالی است. همین صفحه به‌عنوان صفحه لیست ذخیره شود؟\n(بعداً در قدم ۱ جای شماره صفحه {page} بگذارید)')){vBar();return}
     vcfg.list_url=$('#rec-url').value}
   else if(f.page==='list'&&onList===false&&k!=='link'){
@@ -328,18 +365,19 @@ async function vPick(x,y){const k=vArm;vArm=null;
     f.page='detail';delete f.rel;delete f.rel_tags;f.count=''}
   else if(k==='link'&&onList===false){toast('«لینک صفحه جزئیات» را در صفحه لیست انتخاب کنید: روی اسم یک مورد در لیست');vBar();return}
   else if(f.page==='detail'&&onList===true){toast('برای این اطلاعات، اول یک مورد از لیست را باز کنید (روی آن کلیک کنید) و بعد انتخاب کنید');vBar();return}
-  try{const r=await jpost('/api/recorder/pick',{x,y,where:f.page,item_selector:f.page==='list'?vcfg.item_selector:null,attr:f.attr||'text'});
+  try{const r=await jpost('/api/recorder/pick',{x,y,up,where:f.page,item_selector:f.page==='list'?vcfg.item_selector:null,attr:f.attr||'text'});
     if(r.error){toast(r.error);vBar();return}
+    vLast={k,x,y,up};
     if(f.page==='list'){
       if(vcfg.item_selector&&r.item_selector!==vcfg.item_selector){  // a different list: earlier list picks are void
         vcfg.fields.forEach(x=>{if(x.page==='list'){delete x.rel;delete x.rel_tags}});if(vcfg.link){delete vcfg.link.rel}
         toast('لیست جدید تشخیص داده شد؛ بقیه اطلاعات صفحه لیست را دوباره انتخاب کنید')}
       vcfg.item_selector=r.item_selector;
-      const v={rel:r.rel,rel_tags:r.rel_tags,count:`${fa(r.filled)} از ${fa(r.count)}`,sample:r.samples[0]||''};
+      const v={rel:r.rel,rel_tags:r.rel_tags,count:`${fa(r.filled)} از ${fa(r.count)}`,raw:r.samples[0]||''};
       if(k==='link')vcfg.link={name:'لینک صفحه',page:'list',attr:'href',...v};else Object.assign(f,v);
       toast(`${fa(r.count)} مورد در این صفحه پیدا شد · نمونه: ${(r.samples[0]||'—').slice(0,40)}`)}
     else if(k==='click'){vcfg.click={selector:r.selector,sample:r.samples[0]};toast('دکمه انتخاب شد؛ حالا خودتان یک بار رویش کلیک کنید تا اطلاعات نمایش داده شود')}
-    else{Object.assign(f,{selector:r.selector,count:'',sample:r.samples[0]||''});toast(`انتخاب شد: ${(r.samples[0]||'—').slice(0,50)}`)}
+    else{Object.assign(f,{selector:r.selector,count:'',raw:r.samples[0]||''});toast(`انتخاب شد: ${(r.samples[0]||'—').slice(0,50)}`)}
     vBar();vRender();vSave(true)}
   catch(err){toast(err.message);vBar()}
   setTimeout(recShot,200)}
@@ -437,7 +475,7 @@ async function recStart(){const url=prompt('آدرس صفحه شروع (معمو
   try{const r=await jpost(`/api/categories/${cat.id}/recorder/start`,{url});if(r.warning)toast('صفحه کامل باز نشد؛ ادامه دهید');recOpen(r.url)}catch(err){toast(err.message)}}
 const REC_HELP_VISUAL='روی تصویر کلیک کنید و تایپ کنید، درست مثل یک مرورگر. <b>۱.</b> اگر لازم است لاگین کنید و به صفحه لیست بروید <b>۲.</b> روی اسم یک اطلاعات در نوار زیر بزنید و بعد روی همان چیز در صفحه کلیک کنید (موارد پیدا‌شده قرمز می‌شوند) <b>۳.</b> برای اطلاعات «جزئیات» یک مورد را باز کنید و همان‌جا انتخاب کنید <b>۴.</b> «پایان و ذخیره» (ورود شما هم برای جمع‌آوری ذخیره می‌شود).';
 let recHelpApi=null;
-function recOpen(url){vArm=null;vBar();recHelpApi??=$('#rec-help').innerHTML;$('#rec-help').innerHTML=cat?.mode==='visual'?REC_HELP_VISUAL:recHelpApi;$('#rec').classList.remove('hidden');$('#rec-url').value=url||'';$('#rec-img').focus();clearInterval(recTimer);recShot();recTimer=setInterval(recShot,700)}
+function recOpen(url){vArm=null;vLast=null;vBar();recHelpApi??=$('#rec-help').innerHTML;$('#rec-help').innerHTML=cat?.mode==='visual'?REC_HELP_VISUAL:recHelpApi;$('#rec').classList.remove('hidden');$('#rec-url').value=url||'';$('#rec-img').focus();clearInterval(recTimer);recShot();recTimer=setInterval(recShot,700)}
 async function recShot(){if(recBusy)return;recBusy=true;
   // never wait on one picture for long: a stuck request would freeze the screen
   const ac=new AbortController(),tm=setTimeout(()=>ac.abort(),8000);
