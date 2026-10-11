@@ -36,6 +36,9 @@ pre{direction:ltr;text-align:left;background:var(--bg);padding:12px;border-radiu
 .note{background:var(--bg);border-right:3px solid var(--warn);padding:8px 12px;border-radius:6px;font-size:13px;color:var(--mute)}
 .tabs button.on{background:var(--pri);color:#fff;border-color:var(--pri)}
 .hidden{display:none}
+.note:empty{display:none}
+.tabs button:disabled{opacity:.45;cursor:not-allowed}
+.newhar{border:2px dashed var(--line);border-radius:10px;padding:12px;margin-bottom:12px}
 #toast{position:fixed;bottom:16px;left:16px;background:var(--ink);color:var(--bg);padding:8px 14px;border-radius:8px;opacity:0;transition:.2s}
 #toast.show{opacity:1}
 </style>
@@ -63,9 +66,15 @@ pre{direction:ltr;text-align:left;background:var(--bg);padding:12px;border-radiu
       <button data-t="har" onclick="tab('har')">HAR و درخواست‌ها</button>
       <button data-t="runs" onclick="tab('runs')">اجراها و خروجی</button>
     </div>
+    <p id="new-hint" class="note hidden">برای سایت جدید: اطلاعات را پر کنید و «ذخیره» بزنید؛ بعد از ذخیره، تب‌های «HAR و درخواست‌ها» و «اجراها و خروجی» فعال می‌شوند.</p>
 
     <div id="t-settings">
       <form id="f-site" onsubmit="saveSite(event)">
+        <div id="new-har" class="newhar hidden">
+          <label style="margin-top:0">۱) فایل HAR را انتخاب کنید (اختیاری؛ دامنه‌ها و نام خودکار پر می‌شوند و بعد از ذخیره خودکار آپلود می‌شود)</label>
+          <input type="file" id="new-har-file" accept=".har,application/json" onchange="pickHar(this)">
+          <small id="new-har-info" class="note" style="display:block;margin-top:4px"></small>
+        </div>
         <div class="grid2">
           <div><label>نام سایت</label><input name="name" required></div>
           <div><label>شماره/شناسه قرارداد *</label><input name="contract_ref" required></div>
@@ -84,7 +93,7 @@ pre{direction:ltr;text-align:left;background:var(--bg);padding:12px;border-radiu
         <small id="eh-names" class="note" style="display:block;margin-top:4px"></small>
         <label><input type="checkbox" name="enabled" style="width:auto" checked> فعال</label>
         <p class="note">درخواست‌ها فقط به دامنه‌های مجاز همین قرارداد ارسال می‌شوند و بعد از تاریخ پایان قرارداد اجرا متوقف می‌شود.</p>
-        <button class="pri">ذخیره</button>
+        <button class="pri" id="btn-save">ذخیره</button>
       </form>
     </div>
 
@@ -136,35 +145,62 @@ async function loadSites(){
     </div>`).join(''):'<p class="note">هنوز سایتی ثبت نشده.</p>';
   if(cur){cur=sites.find(s=>s.id===cur.id)||null; if(cur) $('#btn-run').disabled=cur.running}
 }
-function newSite(){cur=null;$('#detail').classList.remove('hidden');$('#d-title').textContent='سایت جدید';$('#f-site').reset();$('#eh-names').textContent='';$('#har-stats').innerHTML='';
-  $('#btn-run').classList.add('hidden');$('#btn-del').classList.add('hidden');tab('settings');loadSites()}
-function openSite(id){cur=sites.find(s=>s.id===id);$('#detail').classList.remove('hidden');$('#d-title').textContent=cur.name;
-  $('#btn-run').classList.remove('hidden');$('#btn-del').classList.remove('hidden');
+function setNewMode(on){
+  document.querySelectorAll('.tabs button[data-t=har],.tabs button[data-t=runs]').forEach(b=>{b.disabled=on;b.title=on?'اول سایت را ذخیره کنید':''});
+  $('#new-hint').classList.toggle('hidden',!on);$('#new-har').classList.toggle('hidden',!on);
+  $('#btn-run').classList.toggle('hidden',on);$('#btn-del').classList.toggle('hidden',on)}
+function newSite(){cur=null;pendingHar=null;$('#detail').classList.remove('hidden');$('#d-title').textContent='سایت جدید';$('#f-site').reset();
+  $('#eh-names').textContent='';$('#new-har-info').textContent='';$('#har-stats').innerHTML='';$('#output').classList.add('hidden');
+  setNewMode(true);tab('settings');loadSites();$('#f-site').name.focus()}
+let pendingHar=null;
+// Read the HAR in the browser to suggest allowed domains (the API hosts it contains)
+function pickHar(inp){const file=inp.files[0];pendingHar=file||null;$('#new-har-info').textContent='';if(!file)return;
+  const rd=new FileReader();rd.onload=()=>{try{
+    const d=JSON.parse(String(rd.result).replace(/^\uFEFF/,''));const cnt={};
+    for(const e of d.log.entries){let h;try{h=new URL(e.request.url).hostname}catch{continue}
+      const rt=(e._resourceType||'').toLowerCase(),mt=(e.response?.content?.mimeType||'').toLowerCase();
+      if(rt==='xhr'||rt==='fetch'||mt.includes('json'))cnt[h]=(cnt[h]||0)+1}
+    const hosts=Object.keys(cnt).sort((a,b)=>cnt[b]-cnt[a]).slice(0,5);const f=$('#f-site');
+    if(!hosts.length){$('#new-har-info').textContent='در این HAR درخواست API (XHR/JSON) پیدا نشد؛ دامنه را دستی وارد کنید.';return}
+    if(!f.allowed_domains.value.trim())f.allowed_domains.value=hosts.join(', ');
+    if(!f.name.value.trim())f.name.value=hosts[0];
+    $('#new-har-info').textContent=`${fa(d.log.entries.length)} درخواست در فایل؛ دامنه‌های API: ${hosts.join('، ')} — دامنه‌هایی را که در قرارداد نیستند حذف کنید.`;
+  }catch(err){pendingHar=null;$('#new-har-info').textContent='فایل HAR معتبر نیست: '+err.message}};rd.readAsText(file)}
+function openSite(id){cur=sites.find(s=>s.id===id);if(!cur)return;$('#detail').classList.remove('hidden');$('#d-title').textContent=cur.name;
+  setNewMode(false);
   const f=$('#f-site');f.name.value=cur.name;f.contract_ref.value=cur.contract_ref;f.allowed_domains.value=cur.allowed_domains.join(', ');
   f.contract_expires.value=cur.contract_expires||'';f.delay_seconds.value=cur.delay_seconds;f.schedule_minutes.value=cur.schedule_minutes||'';f.enabled.checked=!!cur.enabled;f.extra_headers.value='';
   $('#eh-names').textContent=cur.extra_header_names?.length?`هدرهای ثبت‌شده: ${cur.extra_header_names.join('، ')} — برای تغییر، دوباره وارد کنید؛ برای حذف، فقط «Name:» بنویسید.`:'';
   $('#har-stats').innerHTML='';$('#output').classList.add('hidden');tab(curTab);loadSites()}
-function tab(t){curTab=t;['settings','har','runs'].forEach(x=>$('#t-'+x).classList.toggle('hidden',x!==t));
+function tab(t){if(!cur&&t!=='settings'){toast('اول اطلاعات سایت را وارد و «ذخیره» کنید');t='settings'}curTab=t;['settings','har','runs'].forEach(x=>$('#t-'+x).classList.toggle('hidden',x!==t));
   document.querySelectorAll('.tabs button').forEach(b=>b.classList.toggle('on',b.dataset.t===t));
-  if(!cur&&t!=='settings')return tab('settings');
-  if(t==='har')loadReqs(); if(t==='runs')loadRuns()}
+  if(t==='har')loadReqs().catch(e=>toast(e.message)); if(t==='runs')loadRuns().catch(e=>toast(e.message))}
 
 function parseHeaders(t){const o={};for(const line of t.split('\n')){const i=line.indexOf(':');if(i>0)o[line.slice(0,i).trim()]=line.slice(i+1).trim()}return o}
 async function saveSite(e){e.preventDefault();const f=e.target;
   const body={name:f.name.value,contract_ref:f.contract_ref.value,allowed_domains:f.allowed_domains.value.split(',').map(s=>s.trim()).filter(Boolean),
     contract_expires:f.contract_expires.value||null,extra_headers:parseHeaders(f.extra_headers.value),delay_seconds:+f.delay_seconds.value||0,schedule_minutes:f.schedule_minutes.value?+f.schedule_minutes.value:null,enabled:f.enabled.checked};
+  const btn=$('#btn-save'),isNew=!cur;btn.disabled=true;btn.textContent='در حال ذخیره…';
   try{const s=await api(cur?`/api/sites/${cur.id}`:'/api/sites',{method:cur?'PUT':'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
-    toast('ذخیره شد');await loadSites();openSite(s.id)}catch(err){toast(err.message)}}
+    toast('ذخیره شد');await loadSites();
+    if(isNew){curTab='har';openSite(s.id);if(pendingHar){const file=pendingHar;pendingHar=null;await sendHar(file,true,true)}}
+    else openSite(s.id)}
+  catch(err){toast(err.message)}finally{btn.disabled=false;btn.textContent='ذخیره'}}
 async function delSite(){if(!confirm('سایت و همه داده‌هایش حذف شود؟'))return;await api(`/api/sites/${cur.id}`,{method:'DELETE'});cur=null;$('#detail').classList.add('hidden');loadSites()}
 
-async function uploadHar(e){e.preventDefault();const f=e.target,fd=new FormData();fd.append('file',f.file.files[0]);
-  fd.append('api_only',f.api_only.checked);fd.append('replace',f.replace.checked);
+async function uploadHar(e){e.preventDefault();const f=e.target;
+  if(await sendHar(f.file.files[0],f.api_only.checked,f.replace.checked))f.reset()}
+async function sendHar(file,apiOnly,replace){const fd=new FormData();fd.append('file',file);
+  fd.append('api_only',apiOnly);fd.append('replace',replace);
+  const btn=$('#f-har button.pri');btn.disabled=true;btn.textContent='در حال آپلود…';$('#har-stats').innerHTML='<p class="note">در حال آپلود و پردازش HAR…</p>';
   try{const r=await api(`/api/sites/${cur.id}/har`,{method:'POST',body:fd});const s=r.stats;
     $('#har-stats').innerHTML=`<p>از ${fa(s.total)} درخواست: <b>${fa(s.kept)}</b> نگه داشته شد · ${fa(s.outside_domain)} خارج از دامنه قرارداد · ${fa(s.static_or_non_api)} فایل ثابت/غیر API · ${fa(s.duplicates)} تکراری</p>`
       +(s.outside_hosts?.length?`<p class="note">دامنه‌های ردشده (اگر لازم‌اند به «دامنه‌های مجاز» اضافه کنید): <span dir="ltr">${s.outside_hosts.map(esc).join(', ')}</span></p>`:'')
       +(s.kept===0&&s.static_or_non_api?'<p class="note">هیچ درخواست API پیدا نشد؛ اگر سایت داده را در خود صفحه HTML می‌فرستد، تیک «فقط درخواست‌های API» را بردارید.</p>':'')
       +(s.no_auth?'<p class="note" style="border-color:var(--bad)">در این HAR هیچ کوکی یا هدر Authorization نیست؛ احتمالاً با حالت «sanitized» کروم ذخیره شده و اجراها خطای ۴۰۱/۴۰۳ می‌دهند. در DevTools ← Settings ← Preferences ← Network گزینه «Allow to generate HAR with sensitive data» را روشن کنید و با «Export HAR (with sensitive data)» دوباره بگیرید، یا کوکی را در «هدرهای اضافه» تنظیمات وارد کنید.</p>':'');
-    f.reset();loadReqs();loadSites()}catch(err){toast(err.message)}}
+    loadReqs();loadSites();return true}
+  catch(err){$('#har-stats').innerHTML=`<p class="note" style="border-color:var(--bad)">آپلود ناموفق: ${esc(err.message)}</p>`;return false}
+  finally{btn.disabled=false;btn.textContent='آپلود HAR'}}
 async function loadReqs(){const rs=await api(`/api/sites/${cur.id}/requests`);
   $('#reqs').innerHTML=rs.length?rs.map(r=>`<tr><td><input type="checkbox" style="width:auto" ${r.selected?'checked':''} onchange="patchReq(${r.id},{selected:this.checked})"></td>
     <td><input value="${esc(r.label)}" onchange="patchReq(${r.id},{label:this.value})"></td><td>${r.method}</td><td class="url">${esc(r.url)}</td>
@@ -181,7 +217,8 @@ async function loadRuns(){if(!cur)return;const rs=await api(`/api/sites/${cur.id
 async function showOut(id){const o=await api(`/api/runs/${id}/output`);$('#output').classList.remove('hidden');$('#o-title').textContent=`خروجی اجرای ${fa(id)}`;
   $('#o-dl').href=`/api/runs/${id}/download`;$('#o-pre').textContent=JSON.stringify(o,null,2)}
 
-loadSites();setInterval(loadSites,15000);
+const refresh=()=>loadSites().catch(e=>{$('#sites').innerHTML=`<p class="note" style="border-color:var(--bad)">خطا در دریافت لیست سایت‌ها: ${esc(e.message)}</p>`});
+refresh();setInterval(refresh,15000);
 </script>
 </body>
 </html>
