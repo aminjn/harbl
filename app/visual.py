@@ -424,7 +424,11 @@ def run_profiles(cat: dict, site: dict, progress, log) -> dict:
                                   storage_state=str(sess) if sess.exists() else None)
         ctx.route("**/*", lambda r: r.abort() if r.request.resource_type != "document" and is_tracker(r.request.url) else r.continue_())
         page = ctx.new_page()
+        page.on("dialog", lambda d: d.dismiss())  # an alert() would freeze every read of the page
         opened = [0]
+
+        def say(msg: str):  # shows in: journalctl -u har-scraper -f
+            print(f"[بخش {cat['id']}] {msg}", flush=True)
 
         def open_(url: str) -> bool:
             if not host_allowed(url, site["allowed_domains"]):
@@ -438,7 +442,22 @@ def run_profiles(cat: dict, site: dict, progress, log) -> dict:
                 return True
             except Exception as e:
                 log({"url": url, "error": str(e)[:300]})
+                say(f"باز نشد: {url} — {str(e)[:150]}")
                 return False
+
+        def links_now() -> set:
+            try:
+                return {_norm_profile(h, sample) for h in page.evaluate(LINKS_JS, sample)["links"]}
+            except Exception:  # the page is navigating
+                return set()
+
+        def changed(before: set, wait_ms: int = 12000) -> bool:
+            """Did the list show other profiles? (the next page can take a while to load)"""
+            for _ in range(wait_ms // 500):
+                page.wait_for_timeout(500)
+                if links_now() - before:
+                    return True
+            return False
 
         def page_links() -> list[str]:
             # wait for the links, then scroll until no new ones load
@@ -456,31 +475,64 @@ def run_profiles(cat: dict, site: dict, progress, log) -> dict:
                 page.wait_for_timeout(900)
             return links
 
-        def click_next() -> bool:
-            for sel in cfg.get("next_selectors") or []:
+        def click_next(n: int) -> bool:
+            """Page n: the picked "next" button, else the pagination button with the number n, else ?page=n.
+            Moved = profiles not collected yet appear (a wrong button may lead back to an earlier page)."""
+            before = links_now() | set(profiles)
+            try:
+                page.mouse.wheel(0, 20000)  # pagination often renders at the bottom only
+                page.wait_for_timeout(400)
+            except Exception:
+                pass
+            for sel in [] if next_bad[0] else cfg.get("next_selectors") or []:
                 try:
                     loc = page.locator(sel).first
                     if loc.count() and loc.is_visible() and loc.is_enabled():
                         loc.click(timeout=5000)
-                        page.wait_for_timeout(1800)
-                        return True
+                        if changed(before):
+                            return True
+                        say(f"صفحه {n}: دکمه صفحه بعد زده شد ولی پزشک جدیدی نیامد؛ از این به بعد شماره صفحه‌ها زده می‌شود")
+                        next_bad[0] = True
+                        break
                 except Exception:
                     continue
+            fa = str(n).translate(str.maketrans("0123456789", "۰۱۲۳۴۵۶۷۸۹"))
+            for t in (str(n), fa):
+                try:
+                    if page.evaluate(CLICK_TEXT_JS, t) and changed(before):
+                        say(f"صفحه {n}: با دکمه شماره صفحه رفت")
+                        return True
+                except Exception:
+                    pass
+            for base in [page_base[0]]:
+                if base and open_(page_url(base, n)):
+                    page.wait_for_timeout(1500)
+                    if links_now() - before:
+                        say(f"صفحه {n}: با آدرس ?page={n} رفت")
+                        return True
             return False
 
         # 1) list pages: collect profile links
+        page_base, next_bad = [None], [False]
         for base in urls:
+            page_base[0] = base
+            say(f"صفحه لیست: {base}")
             if not open_(base.replace("{page}", "1")):
                 continue
             for n in range(1, max_pages + 1):
                 if n > 1:
-                    moved = click_next() if cfg.get("next_selectors") else open_(page_url(base, n))
+                    if cfg.get("next_selectors"):
+                        moved = click_next(n)
+                    else:
+                        moved = open_(page_url(base, n))
                     if not moved:
+                        say(f"صفحه {n}: صفحه بعدی پیدا نشد؛ پایان این لیست")
                         break
                 links = page_links()
                 links = list(dict.fromkeys(_norm_profile(h, sample) for h in links))
                 new = [h for h in links if h not in profiles and host_allowed(h, site["allowed_domains"])]
                 log({"url": page.url, "links": len(links), "new": len(new)})
+                say(f"صفحه {n}: {len(links)} لینک پروفایل، {len(new)} جدید (تا اینجا {len(profiles) + len(new)})")
                 if not new:  # past the last page
                     break
                 profiles.extend(new)
@@ -491,7 +543,9 @@ def run_profiles(cat: dict, site: dict, progress, log) -> dict:
 
         # 2) every profile: read the picked fields
         empty = {f["name"]: 0 for f in fields}
-        for href in profiles:
+        say(f"{len(profiles)} پروفایل پیدا شد؛ خواندن پروفایل‌ها…")
+        for i, href in enumerate(profiles, 1):
+            say(f"پروفایل {i} از {len(profiles)}: {href}")
             if not open_(href):
                 continue
             for sel in [s for f in fields[:1] for s in (f.get("selectors") or [f.get("selector")]) if s]:
