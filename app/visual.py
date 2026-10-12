@@ -90,7 +90,7 @@ PICK_JS = r"""
     const sel = a.tagName.toLowerCase() + common.map(k => '.' + esc(k)).join('');
     return {sel, list: same.filter(c => c.matches(sel))}; };
   /*__GEO__*/
-  const value = e => attr === 'geo' ? (__geo(e) || '') : attr === 'href' ? (e.closest('a')?.href || '') : attr === 'src' ? (e.currentSrc || e.src || '')
+  const value = e => attr === 'geo' ? (__geo(e) || '') : attr === 'click' ? (e.textContent || '').replace(/\s+/g, ' ').trim() : attr === 'href' ? (e.closest('a')?.href || '') : attr === 'src' ? (e.currentSrc || e.src || '')
                      : __txt(e);
   const mark = els => { document.querySelectorAll('.__pick').forEach(e => { e.classList.remove('__pick'); });
                         if (!document.getElementById('__pickcss')) { const st = document.createElement('style'); st.id = '__pickcss';
@@ -521,33 +521,60 @@ def run_profiles(cat: dict, site: dict, progress, log) -> dict:
     return stats
 
 
+# Runs in the page: click every visible element whose whole text is `text` (e.g. "نمایش شماره" of each office).
 CLICK_TEXT_JS = r"""
 (text) => {
   const norm = t => (t || '').replace(/\s+/g, ' ').trim();
-  for (const e of document.querySelectorAll('button,[role=button],a,span,div')) {
-    if (norm(e.textContent) === text && e.children.length < 4 && e.offsetParent !== null) { e.click(); return true; }
-  }
-  return false; }
+  const hits = [...document.querySelectorAll('button,[role=button],a,span,div,p,li')]
+    .filter(e => norm(e.textContent) === text && e.offsetParent !== null);
+  // the innermost match only (a wrapper div has the same text as its button)
+  const inner = hits.filter(e => !hits.some(o => o !== e && e.contains(o))).slice(0, 10);
+  for (const e of inner) { try { e.click(); } catch (_) {} }
+  return inner.length; }
 """
 
 
+def _clicks(cfg: dict) -> list[dict]:
+    """The "show ..." buttons, in order. Older settings had a single one."""
+    if cfg.get("clicks"):
+        return [c for c in cfg["clicks"] if c.get("text") or c.get("selectors")]
+    if cfg.get("detail_click") or cfg.get("click_text"):
+        return [{"selectors": cfg.get("click_selectors") or [cfg.get("detail_click")], "text": cfg.get("click_text") or ""}]
+    return []
+
+
 def _click_show(page, cfg: dict) -> bool:
-    """The optional "show number"-style button: by its saved selectors, else by its text."""
-    sels = cfg.get("click_selectors") or ([cfg["detail_click"]] if cfg.get("detail_click") else [])
-    for sel in sels:
-        try:
-            loc = page.locator(sel).first
-            if loc.count() and loc.is_visible():
-                loc.click(timeout=5000)
-                return True
-        except Exception:
-            continue
-    if cfg.get("click_text"):
-        try:
-            return bool(page.evaluate(CLICK_TEXT_JS, cfg["click_text"]))
-        except Exception:
-            return False
-    return False
+    """Click each "show number"-style button in order: by its text (every copy on the page), else by its selectors."""
+    def press(btn) -> int:
+        n = 0
+        if btn.get("text"):
+            try:
+                n = page.evaluate(CLICK_TEXT_JS, btn["text"])
+            except Exception:
+                n = 0
+        if not n:
+            for sel in [x for x in btn.get("selectors") or [] if x]:
+                try:
+                    loc = page.locator(sel).first
+                    if loc.count() and loc.is_visible():
+                        loc.click(timeout=5000)
+                        return 1
+                except Exception:
+                    continue
+        return n
+
+    clicked = False
+    for i, btn in enumerate(_clicks(cfg)):
+        # a later button (e.g. "confirm" in a small window) appears only after the one before: wait for it
+        tries = 8 if i and clicked else 1
+        for _ in range(tries):
+            if press(btn):
+                clicked = True
+                page.wait_for_timeout(700)
+                break
+            if tries > 1:
+                page.wait_for_timeout(500)
+    return clicked
 
 
 def _read_settled(page, fields: list, wait_ms: int) -> dict:

@@ -261,6 +261,7 @@ class VisualIn(BaseModel):
     link_count: int = 0
     click_selectors: list = []
     click_text: str = ""
+    clicks: list = []               # [{selectors, text}]: "show ..." buttons clicked in order on each profile
     next_selectors: list = []
 
 
@@ -289,7 +290,9 @@ def save_visual(cid: int, body: VisualIn):
                "detail_link": body.detail_link or None, "detail_click": body.detail_click or None,
                "rules": [[str(r[0]), str(r[1])] for r in body.rules if isinstance(r, list) and len(r) >= 2 and str(r[0])],
                "is_list": body.is_list, "flow": body.flow, "profile_url": body.profile_url.strip(),
-               "link_sample": body.link_sample.strip(), "link_count": body.link_count, "click_selectors": [str(x) for x in body.click_selectors if x], "click_text": body.click_text.strip()[:80], "next_selectors": [str(x) for x in body.next_selectors if x]}
+               "link_sample": body.link_sample.strip(), "link_count": body.link_count, "click_selectors": [str(x) for x in body.click_selectors if x], "click_text": body.click_text.strip()[:80],
+               "clicks": [{"selectors": [str(x) for x in (b.get("selectors") or []) if x][:8], "text": str(b.get("text") or "").strip()[:80]}
+                          for b in body.clicks if isinstance(b, dict) and (b.get("selectors") or b.get("text"))], "next_selectors": [str(x) for x in body.next_selectors if x]}
         # the picked fields are the output, so no separate field choice
         c.execute("UPDATE categories SET config=?, mode='visual', fields='[]' WHERE id=?", (json.dumps(cfg, ensure_ascii=False), cid))
     if cfg.get("flow") == "profiles" and cfg.get("link_sample"):

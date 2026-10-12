@@ -277,7 +277,8 @@ function vLoad(){const c=cat.config||{};vErr='';
   const fields=(c.fields||[]).filter(f=>f.name&&f.name!==c.detail_link).map(f=>({...f}));
   vcfg={list_url:c.list_url||'',max_pages:c.max_pages||200,link_sample:c.link_sample||'',link_count:c.link_count||0,
     next_selectors:c.next_selectors||[],profile_url:c.profile_url||'',
-    click:c.detail_click?{selector:c.detail_click,selectors:c.click_selectors||[],text:c.click_text||''}:null,
+    // "show ..." buttons clicked in order on every profile (older settings had one)
+    clicks:(c.clicks||[]).length?c.clicks.map(b=>({...b})):(c.detail_click||c.click_text)?[{selectors:c.click_selectors?.length?c.click_selectors:[c.detail_click],text:c.click_text||''}]:[],
     fields:fields.length?fields:[{name:'نام',attr:'text'},{name:'تخصص',attr:'text'},{name:'تلفن',attr:'text'}],
     rules:c.rules||[],_cid:cat.id};
   // picks made on another kind of page (e.g. on the list in the older flow) do not work on profiles: pick again
@@ -337,9 +338,10 @@ function vRender(){if(!$('#vis'))return;
       <span>${vStatus(f)}</span><button onclick="vReset(${i})" title="پاک کردن انتخاب (برای انتخاب دوباره)">↺</button><button onclick="vEdit=vEdit===${i}?-1:${i};vRender()" title="ویرایش متن (حذف/جایگزینی کلمه)">✎</button><button class="bad" onclick="vcfg.fields.splice(${i},1);vEdit=-1;vRender();vSave(true)" title="حذف">✕</button></div>${vEdit===i?vEditor(i):''}`).join('')}
     </div>
     <button style="margin-top:6px" onclick="vcfg.fields.push({name:'',attr:'text'});vRender()">+ اطلاعات جدید</button>
-    <div class="frow" style="grid-template-columns:minmax(0,1fr) minmax(0,1.6fr) 30px;margin-top:6px"><b>🔘 دکمه نمایش <small>(اختیاری؛ مثل «نمایش شماره»)</small></b>
-      <span>${vcfg.click?okMark(true,'انتخاب شد؛ قبل از خواندن هر پروفایل زده می‌شود'):'<small>ندارد</small>'}</span>
-      ${vcfg.click?`<button class="bad" onclick="vcfg.click=null;vRender();vSave(true)">✕</button>`:'<span></span>'}</div>
+    <div style="margin-top:6px">${vcfg.clicks.map((b,i)=>`<div class="frow" style="grid-template-columns:minmax(0,1fr) minmax(0,1.6fr) 30px"><b>🔘 دکمه نمایش ${fa(i+1)}</b>
+      <span><span class="ok">✓</span> <small>«${esc(b.text||'دکمه')}» — قبل از خواندن هر پروفایل زده می‌شود${vcfg.clicks.length>1?' (به همین ترتیب)':''}</small></span>
+      <button class="bad" onclick="vcfg.clicks.splice(${i},1);vRender();vSave(true)" title="حذف">✕</button></div>`).join('')}
+      <small class="note" style="display:block;margin-top:4px">🔘 <b>دکمه نمایش</b> (اختیاری؛ مثل «نمایش شماره»): اگر اطلاعاتی پشت دکمه است، در مرورگر «+ دکمه نمایش» را بزنید و روی دکمه کلیک کنید. هر چند تا لازم است اضافه کنید؛ اگر یک دکمه چند بار در صفحه هست (مثلاً برای هر مطب)، همه‌اش زده می‌شود.</small></div>
     <details style="margin-top:8px" ${(vcfg.rules||[]).length?'open':''}><summary>قانون جایگزینی برای همه اطلاعات این بخش (${fa((vcfg.rules||[]).length)})</summary>
       <label>هر خط یک قانون: <b>کلمه = جایگزین</b> — هر جا این کلمه بود، با جایگزینش عوض می‌شود (جایگزین خالی = حذف)</label>
       <textarea rows="3" placeholder="متخصص = تخصص&#10;ي = ی&#10;ك = ک" oninput="vcfg.rules=parsePairs(this.value);vcfg.fields.forEach((f,i)=>vPrev(i))" onchange="vSave(true)">${esc(pairsText(vcfg.rules))}</textarea>
@@ -351,7 +353,7 @@ function vRender(){if(!$('#vis'))return;
 function vReset(i){const f=vcfg.fields[i];['rel','rel_tags','rels','selector','selectors','raw','sample','at','count'].forEach(k=>delete f[k]);vRender();vSave(true)}
 function vPayload(){const fields=vcfg.fields.filter(f=>f.name.trim()).map(f=>({...f,name:f.name.trim(),page:'detail'}));
   return {flow:'profiles',list_url:vcfg.list_url,max_pages:vcfg.max_pages,item_selector:'',fields,detail_link:null,
-    detail_click:vcfg.click?.selector||null,click_selectors:vcfg.click?.selectors||[],click_text:vcfg.click?.text||'',rules:vcfg.rules||[],is_list:true,
+    clicks:vcfg.clicks,detail_click:null,click_selectors:[],click_text:'',rules:vcfg.rules||[],is_list:true,
     profile_url:vcfg.profile_url||'',link_sample:vcfg.link_sample||'',link_count:vcfg.link_count||0,next_selectors:vcfg.next_selectors||[]}}
 let vErr='';
 function vShowErr(){const e=$('#v-err');if(e){e.innerHTML=vErr;e.classList.toggle('hidden',!vErr)}}
@@ -384,7 +386,7 @@ function vBar(){const bar=$('#rec-pick');if(!vcfg||cat?.mode!=='visual'){bar.inn
   bar.innerHTML=(vArm?'<span><b>حالا روی همان چیز در صفحه کلیک کنید</b> (برای لغو دوباره روی دکمه بزنید)</span>':'')
     +`<span style="border:1px solid var(--line);border-radius:8px;padding:2px 6px"><b>۱ صفحه لیست:</b> ${nav('list','↪ برو')}${chip('link','لینک پروفایل',vcfg.link_sample)}${chip('next','دکمه صفحه بعد (اختیاری)',vcfg.next_selectors.length)}</span>`
     +`<span style="border:1px solid var(--line);border-radius:8px;padding:2px 6px"><b>۲ صفحه پروفایل:</b> ${nav('profile','↪ برو')}`
-    +vcfg.fields.map((f,i)=>f.name.trim()?chip('f'+i,f.name,vPicked(f)):'').join('')+chip('click','دکمه نمایش (اختیاری)',vcfg.click)+'<button onclick="vTest()" title="همین صفحه را مثل جمع‌آوری بخوان">🧪 آزمایش این صفحه</button></span>'+size+modeSw
+    +vcfg.fields.map((f,i)=>f.name.trim()?chip('f'+i,f.name,vPicked(f)):'').join('')+vcfg.clicks.map((b,i)=>chip('c'+i,'دکمه نمایش '+fa(i+1),true)).join('')+chip('cnew','+ دکمه نمایش',false)+'<button onclick="vTest()" title="همین صفحه را مثل جمع‌آوری بخوان">🧪 آزمایش این صفحه</button></span>'+size+modeSw
     +(vTestOut?`<div style="flex-basis:100%;border:1px solid var(--line);border-radius:8px;padding:6px 10px;font-size:13px">${vTestOut}</div>`:'')}
 let vTestOut='';
 async function vTest(){const fields=vPayload().fields.filter(vPicked);
@@ -397,7 +399,7 @@ async function vTest(){const fields=vPayload().fields.filter(vPicked);
 function vArmSet(k){vArm=vArm===k?null:k;vHlHide();vBar()}
 // ----- live outline: what a click would take -----
 let vMode='exact',vHovTimer=null,vHovBusy=false;
-function vTarget(k){if(k==='link')return 'href';if(k==='click'||k==='next')return 'click';return vcfg.fields[+k.slice(1)]?.attr||'text'}
+function vTarget(k){if(k==='link')return 'href';if(k==='next'||/^c(\d+|new)$/.test(k))return 'click';return vcfg.fields[+k.slice(1)]?.attr||'text'}
 async function vHover(x,y){if(!vArm)return null;
   return jpost('/api/recorder/hover',{x,y,mode:vArm.startsWith('f')?vMode:'exact',where:'detail',item_selector:null,attr:vTarget(vArm)}).catch(()=>null)}
 function vHlShow(h){const hl=$('#rec-hl'),img=$('#rec-img');if(!h||!vArm){vHlHide();return}
@@ -417,7 +419,9 @@ async function vPick(x,y,up=0){const k=vArm;vArm=null;
       vcfg.link_sample=href;vcfg.link_count=l.links.length;
       toast(`${fa(l.links.length)} پروفایل در این صفحه پیدا شد`)}
     else if(k==='next'){vcfg.next_selectors=r.selectors||[r.selector];toast('دکمه صفحه بعد انتخاب شد')}
-    else if(k==='click'){vcfg.click={selector:r.selector,selectors:r.selectors||[],text:(r.samples[0]||'').slice(0,80)};toast('دکمه انتخاب شد؛ حالا خودتان یک بار رویش کلیک کنید تا اطلاعات نمایش داده شود')}
+    else if(/^c(\d+|new)$/.test(k)){const b={selectors:r.selectors||[r.selector],text:(r.samples[0]||'').slice(0,80)};
+      if(k==='cnew')vcfg.clicks.push(b);else vcfg.clicks[+k.slice(1)]=b;
+      toast(`دکمه «${b.text||'—'}» انتخاب شد؛ حالا خودتان یک بار رویش کلیک کنید تا اطلاعات نمایش داده شود`)}
     else{const f=vcfg.fields[+k.slice(1)];vLast={k,x,y,up};
       Object.assign(f,{page:'detail',selector:r.selector,selectors:r.selectors,raw:r.samples[0]||'',at:(()=>{try{return new URL($('#rec-url').value).pathname}catch{return ''}})()});
       ['rel','rel_tags','rels','count'].forEach(x=>delete f[x]);
