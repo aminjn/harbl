@@ -244,6 +244,7 @@ class VisualIn(BaseModel):
     detail_link: str | None = None
     detail_click: str | None = None
     rules: list = []                # [[word, replacement], ...] applied to every field
+    is_list: bool = False           # the addresses are lists of many items (search results)
 
 
 @app.put("/api/categories/{cid}/visual", dependencies=[Depends(auth)])
@@ -269,7 +270,8 @@ def save_visual(cid: int, body: VisualIn):
                   for f in body.fields if str(f.get("name") or "").strip()]
         cfg = {"list_url": url, "max_pages": body.max_pages, "item_selector": body.item_selector, "fields": fields,
                "detail_link": body.detail_link or None, "detail_click": body.detail_click or None,
-               "rules": [[str(r[0]), str(r[1])] for r in body.rules if isinstance(r, list) and len(r) >= 2 and str(r[0])]}
+               "rules": [[str(r[0]), str(r[1])] for r in body.rules if isinstance(r, list) and len(r) >= 2 and str(r[0])],
+               "is_list": body.is_list}
         # the picked fields are the output, so no separate field choice
         c.execute("UPDATE categories SET config=?, mode='visual', fields='[]' WHERE id=?", (json.dumps(cfg, ensure_ascii=False), cid))
         return {**_cat_out(_get_cat(c, cid)), "warnings": warnings}

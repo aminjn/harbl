@@ -16,7 +16,7 @@ import json
 import re
 import time
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import parse_qsl, urlencode, urlparse, urlsplit, urlunsplit
 
 from . import db
 from .config import DATA_DIR
@@ -228,7 +228,14 @@ def session_file(category_id: int) -> Path:
 
 
 def page_url(list_url: str, n: int) -> str:
-    return list_url.replace("{page}", str(n))
+    """Page n of a list: fills {page}; without it page 1 is the address itself and later pages get ?page=n."""
+    if "{page}" in list_url:
+        return list_url.replace("{page}", str(n))
+    if n == 1:
+        return list_url
+    u = urlsplit(list_url)
+    q = [(k, v) for k, v in parse_qsl(u.query, keep_blank_values=True) if k != "page"] + [("page", str(n))]
+    return urlunsplit(u._replace(query=urlencode(q)))
 
 
 def _key(row: dict, link_field: str | None) -> str:
@@ -308,8 +315,15 @@ def run(cat: dict, site: dict, progress, log) -> dict:
                 except PwTimeout:
                     log({"url": url, "rows": 0})
                     break
-                page.mouse.wheel(0, 20000)  # lazy-loaded cards
-                page.wait_for_timeout(800)
+                # cards that load while scrolling: scroll until no new ones appear
+                seen = -1
+                for _ in range(25):
+                    count = page.locator(cfg["item_selector"]).count()
+                    if count == seen:
+                        break
+                    seen = count
+                    page.mouse.wheel(0, 20000)
+                    page.wait_for_timeout(900)
                 rows = [r for r in page.evaluate(LIST_JS, [cfg["item_selector"], list_fields]) if any(r.values())]
                 log({"url": url, "rows": len(rows)})
                 first = json.dumps(rows[:1], ensure_ascii=False)
@@ -322,7 +336,7 @@ def run(cat: dict, site: dict, progress, log) -> dict:
                 progress(stats)
 
         for base in urls:
-            if "{page}" in base and list_fields and cfg.get("item_selector"):
+            if ("{page}" in base or cfg.get("is_list")) and list_fields and cfg.get("item_selector"):
                 list_pages(base)
             elif detail_fields and open_(base.replace("{page}", "1")):
                 # a single page: its picked fields make one record
