@@ -182,7 +182,10 @@ function show(id){['welcome','form-card','site-card'].forEach(x=>$('#'+x).classL
 
 // ----- sites -----
 async function loadSites(){
-  sites=await api('/api/sites');
+  // a failed load must say so: an empty list looks like all the data is gone
+  try{sites=await api('/api/sites')}
+  catch(err){$('#sites').innerHTML=`<p class="note warn">لیست سایت‌ها از سرور نیامد: ${esc(err.message)}<br>داده‌ها سر جایشان است؛ چند ثانیه بعد دوباره امتحان کنید.<br><button style="margin-top:6px" onclick="loadSites()">↻ دوباره</button></p>`;
+    clearTimeout(loadSites._t);loadSites._t=setTimeout(loadSites,5000);return}
   $('#sites').innerHTML=sites.length?sites.map(s=>`
     <div class="site ${cur?.id===s.id?'active':''}" onclick="openSite(${s.id})">
       <b>${esc(s.name)}</b> ${s.enabled?'':'<span class="tag failed">غیرفعال</span>'}
