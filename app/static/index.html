@@ -216,7 +216,7 @@ async function delSite(){if(!confirm(`سایت «${cur.name}» و همه بخش�
   await api(`/api/sites/${cur.id}`,{method:'DELETE'});cur=null;show('welcome');loadSites()}
 
 async function openSite(id,catId){cur=sites.find(s=>s.id===id);if(!cur)return;$('#d-title').textContent=cur.name;show('site-card');loadSites();
-  await loadCats(catId)}
+  await loadCats(catId);if(cur.running)watchRun()}  // a run started earlier (or before a reload): follow it, with the stop button
 async function loadCats(selectId){cats=await api(`/api/sites/${cur.id}/categories`);
   const id=selectId??cat?.id;cat=cats.find(c=>c.id===id)||cats[0]||null;
   $('#chips').innerHTML=cats.map(c=>`<button class="chip ${c.id===cat?.id?'on':''}" onclick="selectCat(${c.id})">${esc(c.name)} <small>(${fa(c.item_count)})</small></button>`).join('')
@@ -242,6 +242,7 @@ function renderCat(){
       <h3 style="margin:0">${esc(cat.name)}</h3>
       <div class="row">
         <button class="pri big" id="btn-run" onclick="runCat()" ${ready?'':'disabled'}>▶ گرفتن داده این بخش</button>
+        <button class="bad ${cur?.running?'':'hidden'}" id="btn-stop" onclick="stopRun()">■ توقف</button>
         ${vis?'':`<button onclick="recStart()">🎥 ضبط با مرورگر</button><button onclick="$('#har-input').click()">↻ آپلود HAR</button>`}
       </div>
     </div>
@@ -486,13 +487,15 @@ async function loadItems(){const d=await api(`/api/categories/${cat.id}/items?li
     :`<p class="note">${q?'نتیجه‌ای پیدا نشد.':'هنوز داده‌ای جمع نشده. «▶ گرفتن داده این بخش» را بزنید.'}</p>`}`}
 function setSrc(v){src=v;page=0;loadItems()}
 
-function watchRun(){$('#btn-run')?.setAttribute('disabled','');$('#btn-run-all')?.setAttribute('disabled','');const id=cur.id;clearInterval(poll);
+async function stopRun(){try{const r=await api(`/api/sites/${cur.id}/stop`,{method:'POST'});
+  toast(r.stopping?'در حال توقف… بعد از همین صفحه می‌ایستد؛ آنچه جمع شده می‌ماند':'اجرایی در جریان نیست')}catch(err){toast(err.message)}}
+function watchRun(){$('#btn-run')?.setAttribute('disabled','');$('#btn-run-all')?.setAttribute('disabled','');$('#btn-stop')?.classList.remove('hidden');const id=cur.id;clearInterval(poll);
   poll=setInterval(async()=>{if(cur?.id!==id)return clearInterval(poll);
     const [cs]=await Promise.all([api(`/api/sites/${id}/categories`),loadSites()]);
     const c=cs.find(x=>x.id===cat?.id);
     if(c){$('#cnt').textContent=fa(c.item_count);$('#lastrun').innerHTML=lastRunText(c.last_run)}
-    if(!cur.running){clearInterval(poll);$('#btn-run-all')?.removeAttribute('disabled');await loadCats();
-      toast('تمام شد'+(cat?.last_run?': '+stName[cat.last_run.status]:''))}},2000)}
+    if(!cur.running){clearInterval(poll);$('#btn-run-all')?.removeAttribute('disabled');$('#btn-stop')?.classList.add('hidden');await loadCats();
+      toast('تمام شد'+(cat?.last_run?': '+stName[cat.last_run.status]:''))}},4000)}
 async function runCat(){try{await api(`/api/categories/${cat.id}/run`,{method:'POST'});toast('اجرا شروع شد');watchRun()}catch(err){toast(err.message)}}
 async function runAll(){try{await api(`/api/sites/${cur.id}/run`,{method:'POST'});toast('اجرای همه بخش‌ها شروع شد');watchRun()}catch(err){toast(err.message)}}
 

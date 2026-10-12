@@ -328,11 +328,13 @@ def _run_visual(cat: dict, site: dict, run_id: int, trigger: str) -> dict:
         status = "ok" if not errors else ("partial" if stats["rows"] else "failed")
         message = (f"{stats['rows']} مورد از {stats['pages']} صفحه ({stats['new']} جدید"
                    + (f"، جزئیات {stats['details']}" if stats["details"] else "") + f") · مجموع این بخش: {total}")
+        if stats.get("stopped"):
+            message = "متوقف شد · " + message
         if stats.get("empty"):  # fields the profiles did not show: wrong pick, or the number needs login/click
             message += " · خالی ماند: " + "، ".join(f"{k} در {v} پروفایل" for k, v in stats["empty"].items())
             if status == "ok":
                 status = "partial"
-        if not stats["rows"]:
+        if not stats["rows"] and not stats.get("stopped"):
             status, message = "failed", "در صفحه لیست موردی پیدا نشد؛ آدرس لیست را بررسی کنید یا اطلاعات را دوباره روی صفحه انتخاب کنید"
     except ImportError:
         status, message = "failed", "مرورگر روی سرور نصب نیست؛ sudo bash deploy/install-recorder.sh"
@@ -357,4 +359,9 @@ def run_site(site_id: int, trigger: str = "manual", category_id: int | None = No
     with db.conn() as c:
         ids = [category_id] if category_id else [
             r["id"] for r in c.execute("SELECT id FROM categories WHERE site_id=? ORDER BY id", (site_id,))]
-    return [run_category(cid, trigger) for cid in ids]
+    out = []
+    for cid in ids:
+        if site_id in visual.STOP:  # the stop button also skips the sections not started yet
+            break
+        out.append(run_category(cid, trigger))
+    return out

@@ -399,6 +399,10 @@ def _dedupe_profiles(category_id: int, sample: str):
                           (key, json.dumps(r["data"], ensure_ascii=False), r["id"]))
 
 
+HEAVY = {"image", "media", "font"}
+STOP: set[int] = set()  # site ids whose running collection should end (panel's stop button)
+
+
 def run_profiles(cat: dict, site: dict, progress, log) -> dict:
     """List pages only give profile links (by the shape of one picked link); every field is read on the profiles."""
     from playwright.sync_api import TimeoutError as PwTimeout, sync_playwright
@@ -420,12 +424,25 @@ def run_profiles(cat: dict, site: dict, progress, log) -> dict:
     with sync_playwright() as pw:
         browser = pw.chromium.launch(args=["--disable-dev-shm-usage"])
         sess = session_file(cat["id"])
-        ctx = browser.new_context(viewport={"width": 1280, "height": 900}, locale="fa-IR",
-                                  storage_state=str(sess) if sess.exists() else None)
-        ctx.route("**/*", lambda r: r.abort() if r.request.resource_type != "document" and is_tracker(r.request.url) else r.continue_())
-        page = ctx.new_page()
-        page.on("dialog", lambda d: d.dismiss())  # an alert() would freeze every read of the page
+        def fresh(state):
+            """A new browser tab set. Pictures, videos and fonts are not loaded: only text and addresses are read
+            (a picture field keeps its address), and a long run stays light for the server."""
+            c = browser.new_context(viewport={"width": 1280, "height": 900}, locale="fa-IR", storage_state=state)
+            c.route("**/*", lambda r: r.abort() if r.request.resource_type in HEAVY
+                    or (r.request.resource_type != "document" and is_tracker(r.request.url)) else r.continue_())
+            pg = c.new_page()
+            pg.on("dialog", lambda d: d.dismiss())  # an alert() would freeze every read of the page
+            return c, pg
+
+        ctx, page = fresh(str(sess) if sess.exists() else None)
         opened = [0]
+
+        def stopped() -> bool:
+            if site.get("id") in STOP:
+                stats["stopped"] = True
+                say("متوقف شد (دکمه توقف)")
+                return True
+            return False
 
         def say(msg: str):  # shows in: journalctl -u har-scraper -f
             print(f"[بخش {cat['id']}] {msg}", flush=True)
@@ -520,6 +537,8 @@ def run_profiles(cat: dict, site: dict, progress, log) -> dict:
             if not open_(base.replace("{page}", "1")):
                 continue
             for n in range(1, max_pages + 1):
+                if stopped():
+                    break
                 if n > 1:
                     if cfg.get("next_selectors"):
                         moved = click_next(n)
@@ -545,6 +564,15 @@ def run_profiles(cat: dict, site: dict, progress, log) -> dict:
         empty = {f["name"]: 0 for f in fields}
         say(f"{len(profiles)} پروفایل پیدا شد؛ خواندن پروفایل‌ها…")
         for i, href in enumerate(profiles, 1):
+            if stopped():
+                break
+            if i % 40 == 0:  # memory of a browser that opened hundreds of pages keeps growing
+                try:
+                    state = ctx.storage_state()  # keep the login
+                    ctx.close()
+                except Exception:
+                    state = None
+                ctx, page = fresh(state)
             say(f"پروفایل {i} از {len(profiles)}: {href}")
             if not open_(href):
                 continue

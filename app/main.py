@@ -34,6 +34,7 @@ def _job(site_id: int, trigger: str, category_id: int | None = None):
     finally:
         with _running_lock:
             _running.discard(site_id)
+        visual.STOP.discard(site_id)
 
 
 def sync_schedule(site: dict):
@@ -665,6 +666,7 @@ def export_items(cid: int, fmt: str = "json", source: str = ""):
 
 # ---------- Runs ----------
 def _start(site_id: int, category_id: int | None):
+    visual.STOP.discard(site_id)
     if site_id in _running:
         raise HTTPException(409, "این سایت در حال اجراست؛ کمی صبر کنید")
     threading.Thread(target=_job, args=(site_id, "manual", category_id), daemon=True).start()
@@ -676,6 +678,15 @@ def run_site_now(site_id: int):
     with db.conn() as c:
         _get_site(c, site_id)
     return _start(site_id, None)
+
+
+@app.post("/api/sites/{site_id}/stop", dependencies=[Depends(auth)])
+def stop_site_run(site_id: int):
+    """End the running collection after the page it is on; what was gathered stays."""
+    if site_id not in _running:
+        return {"stopping": False}
+    visual.STOP.add(site_id)
+    return {"stopping": True}
 
 
 @app.post("/api/categories/{cid}/run", dependencies=[Depends(auth)])
