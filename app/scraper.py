@@ -329,7 +329,9 @@ def _run_visual(cat: dict, site: dict, run_id: int, trigger: str) -> dict:
         message = (f"{stats['rows']} مورد از {stats['pages']} صفحه ({stats['new']} جدید"
                    + (f"، جزئیات {stats['details']}" if stats["details"] else "") + f") · مجموع این بخش: {total}")
         if stats.get("stopped"):
-            message = "متوقف شد · " + message
+            message = "متوقف شد (اجرای بعدی از همین‌جا ادامه می‌دهد) · " + message
+        if trigger == "resume":
+            message = "ادامه بعد از ری‌استارت · " + message
         if stats.get("empty"):  # fields the profiles did not show: wrong pick, or the number needs login/click
             message += " · خالی ماند: " + "، ".join(f"{k} در {v} پروفایل" for k, v in stats["empty"].items())
             if status == "ok":

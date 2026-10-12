@@ -400,6 +400,28 @@ def _dedupe_profiles(category_id: int, sample: str):
 
 
 HEAVY = {"image", "media", "font"}
+PROGRESS = DATA_DIR / "progress"
+
+
+def progress_file(category_id: int) -> Path:
+    """Where a running profiles collection keeps how far it got, so a restart continues instead of starting over."""
+    return PROGRESS / f"cat_{category_id}.json"
+
+
+def _load_progress(category_id: int, sig: str) -> dict | None:
+    f = progress_file(category_id)
+    try:
+        st = json.loads(f.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return st if st.get("sig") == sig else None  # other addresses / link: a new collection
+
+
+def _save_progress(category_id: int, st: dict):
+    PROGRESS.mkdir(parents=True, exist_ok=True)
+    tmp = progress_file(category_id).with_suffix(".tmp")
+    tmp.write_text(json.dumps(st, ensure_ascii=False), encoding="utf-8")
+    tmp.replace(progress_file(category_id))
 STOP: set[int] = set()  # site ids whose running collection should end (panel's stop button)
 
 
@@ -417,8 +439,16 @@ def run_profiles(cat: dict, site: dict, progress, log) -> dict:
         raise ValueError("در قسمت ۲ هیچ اطلاعاتی روی صفحه پروفایل انتخاب نشده است")
     delay, max_pages = max(site["delay_seconds"], 0), int(cfg.get("max_pages") or 200)
     stats = {"pages": 0, "rows": 0, "new": 0, "details": 0}
-    profiles: list[str] = []
-    origin: dict[str, str] = {}  # profile -> its list address (the group in the panel)
+    # how far an earlier run of the same addresses got (it was cut off by a restart): continue from there
+    sig = hashlib.sha1(json.dumps([urls, sample]).encode()).hexdigest()[:16]
+    st = _load_progress(cat["id"], sig)
+    if st:
+        st["attempts"] = st.get("attempts", 0) + 1
+    else:
+        st = {"sig": sig, "started": db.now(), "lists": {}, "profiles": [], "origin": {}, "read": 0, "attempts": 0}
+    profiles: list[str] = st["profiles"]
+    origin: dict[str, str] = st["origin"]  # profile -> its list address (the group in the panel)
+    _save_progress(cat["id"], st)
     _dedupe_profiles(cat["id"], sample)
 
     with sync_playwright() as pw:
@@ -492,10 +522,11 @@ def run_profiles(cat: dict, site: dict, progress, log) -> dict:
                 page.wait_for_timeout(900)
             return links
 
-        def click_next(n: int) -> bool:
+        def click_next(n: int, new_only: bool = True) -> bool:
             """Page n: the picked "next" button, else the pagination button with the number n, else ?page=n.
-            Moved = profiles not collected yet appear (a wrong button may lead back to an earlier page)."""
-            before = links_now() | set(profiles)
+            Moved = profiles not collected yet appear (a wrong button may lead back to an earlier page);
+            new_only=False when walking again over pages read before a restart."""
+            before = links_now() | (set(profiles) if new_only else set())
             try:
                 page.mouse.wheel(0, 20000)  # pagination often renders at the bottom only
                 page.wait_for_timeout(400)
@@ -529,41 +560,75 @@ def run_profiles(cat: dict, site: dict, progress, log) -> dict:
                         return True
             return False
 
+        def to_next(base: str, n: int, new_only: bool = True) -> bool:
+            if cfg.get("next_selectors"):
+                return click_next(n, new_only)
+            return open_(page_url(base, n))
+
         # 1) list pages: collect profile links
         page_base, next_bad = [None], [False]
         for base in urls:
             page_base[0] = base
+            lst = st["lists"].setdefault(base, {"page": 0, "done": False})
+            if lst["done"]:
+                say(f"صفحه لیست (قبلاً کامل شده): {base}")
+                continue
             say(f"صفحه لیست: {base}")
             if not open_(base.replace("{page}", "1")):
                 continue
-            for n in range(1, max_pages + 1):
-                if stopped():
-                    break
-                if n > 1:
-                    if cfg.get("next_selectors"):
-                        moved = click_next(n)
-                    else:
-                        moved = open_(page_url(base, n))
-                    if not moved:
-                        say(f"صفحه {n}: صفحه بعدی پیدا نشد؛ پایان این لیست")
-                        break
+            n = 1
+            if lst["page"]:
+                # continue after the last page read before the restart: jump there, else walk the pages again
+                target, jumped = lst["page"] + 1, False
+                if open_(page_url(base, target)):
+                    page_links()
+                    jumped = bool(links_now() - set(profiles))
+                if jumped:
+                    n = target
+                    say(f"ادامه از صفحه {n}")
+                else:
+                    say(f"رفتن دوباره تا صفحه {lst['page']}…")
+                    open_(base.replace("{page}", "1"))
+                    while n < lst["page"] and not stopped() and to_next(base, n + 1, new_only=False):
+                        n += 1
+                    if n < lst["page"] or stopped() or not to_next(base, n + 1):
+                        lst["done"] = not stopped()
+                        _save_progress(cat["id"], st)
+                        continue
+                    n += 1
+                    say(f"ادامه از صفحه {n}")
+            while n <= max_pages and not stopped():
                 links = page_links()
                 links = list(dict.fromkeys(_norm_profile(h, sample) for h in links))
-                new = [h for h in links if h not in profiles and host_allowed(h, site["allowed_domains"])]
+                new = [h for h in links if h not in origin and host_allowed(h, site["allowed_domains"])]
                 log({"url": page.url, "links": len(links), "new": len(new)})
                 say(f"صفحه {n}: {len(links)} لینک پروفایل، {len(new)} جدید (تا اینجا {len(profiles) + len(new)})")
                 if not new:  # past the last page
+                    lst["done"] = True
                     break
                 profiles.extend(new)
                 for h in new:
                     origin[h] = source_of(base.replace("{page}", "1"))
+                lst["page"] = n
+                _save_progress(cat["id"], st)
                 stats["pages"] += 1
                 progress({**stats, "rows": len(profiles)})
+                if n == max_pages or not to_next(base, n + 1):
+                    if n < max_pages:
+                        say(f"صفحه {n + 1}: صفحه بعدی پیدا نشد؛ پایان این لیست")
+                    lst["done"] = not stopped()
+                    break
+                n += 1
+            _save_progress(cat["id"], st)
 
         # 2) every profile: read the picked fields
         empty = {f["name"]: 0 for f in fields}
-        say(f"{len(profiles)} پروفایل پیدا شد؛ خواندن پروفایل‌ها…")
+        done_before = st["read"] if not stopped() else len(profiles)
+        say(f"{len(profiles)} پروفایل پیدا شد؛ خواندن پروفایل‌ها…"
+            + (f" (ادامه از پروفایل {done_before + 1})" if done_before else ""))
         for i, href in enumerate(profiles, 1):
+            if i <= done_before:  # read before the restart
+                continue
             if stopped():
                 break
             if i % 40 == 0:  # memory of a browser that opened hundreds of pages keeps growing
@@ -597,9 +662,18 @@ def run_profiles(cat: dict, site: dict, progress, log) -> dict:
                 stats["rows"] += 1
                 stats["new"] += _save(cat["id"], [{**row, "__url": href}], "__url", href, single=True,
                                       source=origin.get(href))
+            st["read"] = i
+            if i % 10 == 0:
+                _save_progress(cat["id"], st)
             progress(stats)
         browser.close()
     stats["empty"] = {k: v for k, v in empty.items() if v}
+    finished = (not stats.get("stopped") and st["read"] >= len(profiles)
+                and all(st["lists"].get(b, {}).get("done") for b in urls))
+    if finished:
+        progress_file(cat["id"]).unlink(missing_ok=True)  # complete: the next run is a new pass
+    else:  # stop button, or a list page that did not open: the next run continues from here
+        _save_progress(cat["id"], st)
     return stats
 
 

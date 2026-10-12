@@ -118,7 +118,7 @@ def init():
             c.execute("UPDATE requests SET category_id=? WHERE site_id=? AND category_id IS NULL", (cid, site_id))
         # Runs interrupted by a restart would otherwise show "running" forever
         c.execute("UPDATE runs SET status='failed', finished_at=?, message=? WHERE status='running'",
-                  (now(), "اجرا به‌دلیل ری‌استارت سرویس نیمه‌کاره ماند"))
+                  (now(), "با ری‌استارت سرور قطع شد؛ اگر جمع‌آوری پروفایل‌ها بود، چند ثانیه بعد خودکار از همان‌جا ادامه می‌یابد"))
 
 
 def row(r):

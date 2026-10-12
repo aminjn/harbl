@@ -4,6 +4,7 @@ import io
 import json
 import secrets
 import threading
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 from urllib.parse import quote
@@ -47,6 +48,32 @@ def sync_schedule(site: dict):
 
 
 @asynccontextmanager
+def _resume_cut_runs():
+    """Collections cut off by a restart (their progress file is still there) continue by themselves."""
+    by_site: dict[int, list[int]] = {}
+    for f in sorted(visual.PROGRESS.glob("cat_*.json")) if visual.PROGRESS.exists() else []:
+        try:
+            st, cid = json.loads(f.read_text(encoding="utf-8")), int(f.stem.split("_")[1])
+        except (OSError, ValueError, IndexError):
+            continue
+        if st.get("attempts", 0) >= 5:  # it keeps failing: leave it to the owner
+            continue
+        with db.conn() as c:
+            row = c.execute("SELECT site_id FROM categories WHERE id=?", (cid,)).fetchone()
+        if row:
+            by_site.setdefault(row["site_id"], []).append(cid)
+        else:
+            f.unlink(missing_ok=True)
+
+    def go(site_id: int, cids: list[int]):
+        time.sleep(15)  # let the server finish starting
+        for cid in cids:
+            _job(site_id, "resume", cid)
+
+    for site_id, cids in by_site.items():
+        threading.Thread(target=go, args=(site_id, cids), daemon=True).start()
+
+
 async def lifespan(app):
     db.init()
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -57,6 +84,7 @@ async def lifespan(app):
         c.executemany("DELETE FROM requests WHERE id=?", [(i,) for i in junk])
         for r in c.execute("SELECT * FROM sites"):
             sync_schedule(db.row(r))
+    _resume_cut_runs()
     yield
     await recorder.stop(save=False)
     scheduler.shutdown(wait=False)
