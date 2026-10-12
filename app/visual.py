@@ -50,6 +50,11 @@ PICK_JS = r"""
                      if (cls.length) s += '.' + cls.map(esc).join('.'); return s; };
   const path = (e, stop, tagsOnly) => { const p = []; while (e && e !== stop && e.nodeType === 1 && e !== document.documentElement) {
                      p.unshift(tagsOnly ? e.tagName.toLowerCase() : seg(e)); e = e.parentElement; } return p.join(' > '); };
+  // siblings of the same kind: same tag and the classes most of them share (an extra "featured" class does not split them)
+  const kind = a => { const same = a.parentElement ? [...a.parentElement.children].filter(c => c.tagName === a.tagName) : [a];
+    const common = [...a.classList].filter(okClass).filter(k => same.filter(c => c.classList.contains(k)).length >= same.length * 0.6).slice(0, 3);
+    const sel = a.tagName.toLowerCase() + common.map(k => '.' + esc(k)).join('');
+    return {sel, list: same.filter(c => c.matches(sel))}; };
   const value = e => attr === 'href' ? (e.closest('a')?.href || '') : attr === 'src' ? (e.currentSrc || e.src || '')
                      : __txt(e);
   const mark = els => { document.querySelectorAll('.__pick').forEach(e => { e.classList.remove('__pick'); });
@@ -61,19 +66,31 @@ PICK_JS = r"""
     if (!card) {  // the repeated card: the ancestor with the most same-looking siblings
       let best = null, bestN = 1;
       for (let a = el; a && a.parentElement && a !== document.body; a = a.parentElement) {
-        const s = seg(a), n = [...a.parentElement.children].filter(c => c.matches(s)).length;
+        const n = kind(a).list.length;
         if (n > bestN) { best = a; bestN = n; }
       }
       if (!best) return {error: 'این مورد در لیستِ تکرارشونده‌ای نیست؛ روی یکی از کارت‌های لیست کلیک کنید'};
       card = best; newCard = true;
-      itemSel = path(card.parentElement, null) + ' > ' + seg(card);
+      // the card selector keeps only classes most sibling cards share ("featured" etc. would drop cards)
+      itemSel = path(card.parentElement, null) + ' > ' + kind(card).sel;
     }
-    const rel = el === card ? ':scope' : path(el, card), relTags = el === card ? ':scope' : path(el, card, true);
     const cards = [...document.querySelectorAll(itemSel)];
-    const pick = c => rel === ':scope' ? c : (c.querySelector(':scope > ' + rel) || c.querySelector(':scope > ' + relTags));
+    // several ways to find the field again inside every card; cards differ (badges, optional rows), so the
+    // ways that work in the most cards come first, and at read time each card uses the first one that works
+    let rels = [':scope'];
+    if (el !== card) {
+      const cands = [':scope > ' + path(el, card), ':scope > ' + path(el, card, true), seg(el)];
+      if (el.parentElement !== card) cands.push(seg(el.parentElement) + ' > ' + seg(el));
+      if (attr === 'href') cands.push('a[href]');
+      if (attr === 'src') cands.push('img');
+      rels = [...new Set(cands)].filter(c => { try { return card.querySelector(c) === el; } catch (_) { return false; } })
+        .map(c => [c, cards.filter(x => x.querySelector(c)).length]).sort((a, b) => b[1] - a[1]).map(x => x[0]);
+      if (!rels.length) rels = [':scope > ' + path(el, card)];
+    }
+    const pick = c => { for (const r of rels) { const e = r === ':scope' ? c : c.querySelector(r); if (e) return e; } return null; };
     const found = cards.map(pick).filter(Boolean);
     mark(found);
-    return {item_selector: itemSel, new_card: newCard, rel, rel_tags: relTags, count: cards.length, filled: found.length,
+    return {item_selector: itemSel, new_card: newCard, rels, rel: rels[0], rel_tags: rels[0], count: cards.length, filled: found.length,
             samples: found.slice(0, 3).map(value)};
   }
   // detail page / button: a selector for this one element
@@ -84,15 +101,32 @@ PICK_JS = r"""
     if (sib.length > 1) s += `:nth-of-type(${[...e.parentElement.children].filter(c => c.tagName === e.tagName).indexOf(e) + 1})`;
     parts.unshift(s);
   }
-  const selector = parts.join(' > ');
+  const positional = parts.join(' > ');
+  const unique = c => { try { const m = document.querySelectorAll(c); return m.length === 1 && m[0] === el; } catch (_) { return false; } };
+  const cands = [];
+  if (el.id && !/\d{3,}/.test(el.id)) cands.push('#' + esc(el.id));
+  for (const a of ['name', 'itemprop', 'data-testid', 'data-test', 'aria-label'])
+    if (el.getAttribute(a)) cands.push(`${el.tagName.toLowerCase()}[${a}="${CSS.escape(el.getAttribute(a))}"]`);
+  cands.push(seg(el));
+  if (el.parentElement) cands.push(seg(el.parentElement) + ' > ' + seg(el));
+  // nearest ancestor with an id or a distinctive class, then the element's own kind inside it
+  for (let a = el.parentElement; a && a !== document.body; a = a.parentElement) {
+    if (a.id && !/\d{3,}/.test(a.id)) { cands.push('#' + esc(a.id) + ' ' + seg(el)); break; }
+    const cls = [...a.classList].filter(okClass);
+    if (cls.length && document.querySelectorAll(a.tagName.toLowerCase() + '.' + cls.map(esc).join('.')).length === 1) {
+      cands.push(seg(a) + ' ' + seg(el)); break; }
+  }
+  const selectors = [...new Set(cands)].filter(unique);
+  selectors.push(positional);
+  const selector = selectors[0];
   mark([el]);
   // is this element inside a repeated, visibly framed card (a results list)? then the panel switches to list mode
   let listHint = 0;
   for (let a = el; a && a.parentElement && a !== document.body; a = a.parentElement) {
     // same-looking siblings that are also built the same way inside (doctor cards yes; a profile's different boxes no)
-    const head = e => e.firstElementChild ? e.firstElementChild.tagName + '.' + e.firstElementChild.className : '';
-    const alike = c => head(c) === head(a) && Math.abs(c.children.length - a.children.length) <= 1;
-    const s = seg(a), sibs = [...a.parentElement.children].filter(c => c.matches(s) && alike(c));
+    const linked = c => c.matches('a[href]') || c.querySelector('a[href]');
+    const alike = c => Math.abs(c.children.length - a.children.length) <= 2 && linked(c);
+    const sibs = kind(a).list.filter(alike);
     if (sibs.length >= 3) {
       const cs = getComputedStyle(a), r = a.getBoundingClientRect();
       const framed = cs.boxShadow !== 'none' || (parseFloat(cs.borderTopWidth) > 0 && cs.borderTopStyle !== 'none')
@@ -100,7 +134,7 @@ PICK_JS = r"""
       if (framed && r.height > 60 && r.width > 200 && a.querySelector('a[href]')) { listHint = sibs.length; break; }
     }
   }
-  return {selector, count: document.querySelectorAll(selector).length, samples: [value(el)], list_hint: listHint};
+  return {selector, selectors, count: document.querySelectorAll(selector).length, samples: [value(el)], list_hint: listHint};
 }
 """
 
@@ -174,7 +208,10 @@ LIST_JS = r"""
   return [...document.querySelectorAll(itemSel)].map(c => {
   const o = {};
   for (const f of fields) {
-    const e = f.rel === ':scope' ? c : (c.querySelector(':scope > ' + f.rel) || c.querySelector(':scope > ' + f.rel_tags));
+    // older settings stored one child path (without ":scope >"), newer ones a list of ways (see PICK_JS)
+    const ways = f.rels && f.rels.length ? f.rels : [f.rel, f.rel_tags].filter(Boolean).map(r => r === ':scope' ? r : ':scope > ' + r);
+    let e = null;
+    for (const r of ways) { try { e = r === ':scope' ? c : c.querySelector(r); } catch (_) { e = null; } if (e) break; }
     o[f.name] = !e ? null : f.attr === 'href' ? (e.closest('a')?.href || null) : f.attr === 'src' ? (e.currentSrc || e.src || null)
               : __txt(e);
   }
@@ -193,7 +230,8 @@ DETAIL_JS = r"""
     c.querySelectorAll('p,div,li,br,h1,h2,h3,h4,h5,h6,tr,section,article').forEach(x => x.append(' '));
     return (c.textContent || '').replace(/\s+/g, ' ').trim(); };
   const o = {};
-  for (const f of fields) { const e = document.querySelector(f.selector);
+  for (const f of fields) { let e = null;
+    for (const sel of (f.selectors && f.selectors.length ? f.selectors : [f.selector])) { try { e = document.querySelector(sel); } catch (_) {} if (e) break; }
     o[f.name] = !e ? null : f.attr === 'href' ? (e.closest('a')?.href || null) : f.attr === 'src' ? (e.currentSrc || e.src || null)
               : __txt(e); }
   return o; }
@@ -302,7 +340,8 @@ def run(cat: dict, site: dict, progress, log) -> dict:
         def read_page() -> dict:
             """The picked page fields of the open page (after the optional button click)."""
             try:
-                page.wait_for_selector(detail_fields[0]["selector"], timeout=15000, state="attached")
+                first = detail_fields[0]
+                page.wait_for_selector(", ".join(first.get("selectors") or [first["selector"]]), timeout=15000, state="attached")
             except PwTimeout:
                 pass
             if cfg.get("detail_click"):
@@ -338,10 +377,11 @@ def run(cat: dict, site: dict, progress, log) -> dict:
                     seen = count
                     page.mouse.wheel(0, 20000)
                     page.wait_for_timeout(900)
-                rows = [r for r in page.evaluate(LIST_JS, [cfg["item_selector"], list_fields]) if any(r.values())]
-                log({"url": url, "rows": len(rows)})
-                first = json.dumps(rows[:1], ensure_ascii=False)
-                if not rows or first == prev_first:  # past the last page
+                cards = page.evaluate(LIST_JS, [cfg["item_selector"], list_fields])
+                rows = [r for r in cards if any(r.values())]
+                log({"url": url, "cards": len(cards), "rows": len(rows)})
+                first = json.dumps(cards[:2], ensure_ascii=False)
+                if not cards or first == prev_first:  # past the last page
                     break
                 prev_first = first
                 stats["pages"] += 1
