@@ -222,7 +222,10 @@ async function loadCats(selectId){cats=await api(`/api/sites/${cur.id}/categorie
   renderCat()}
 function selectCat(id){q='';page=0;src='';loadCats(id)}
 async function addCat(){const name=prompt('نام بخش جدید؟ (مثلاً پزشکان، مراکز درمانی، داروخانه‌ها)');if(!name?.trim())return;
-  const c=await jpost(`/api/sites/${cur.id}/categories`,{name:name.trim()});q='';page=0;src='';await loadCats(c.id)}
+  // same kind of profiles (another specialty / city): keep every pick, only the list address changes
+  const from=cat?.mode==='visual'&&(cat.config?.fields||[]).some(f=>f.selector||(f.selectors||[]).length)?cat:null;
+  const copy=from&&confirm(`تنظیمات صفحه پروفایل و ورود از بخش «${from.name}» کپی شود؟\n(فقط آدرس صفحه لیست را می‌نویسید. برای مراکز یا داروخانه‌ها که صفحه‌شان فرق دارد «Cancel» بزنید)`);
+  const c=await jpost(`/api/sites/${cur.id}/categories`,{name:name.trim(),copy_from:copy?from.id:null});q='';page=0;src='';vcfg=null;await loadCats(c.id)}
 
 // ----- one section -----
 function lastRunText(lr){return lr?`آخرین اجرا ${fmt(lr.started_at)}: <span class="${lr.status}">${stName[lr.status]}</span>${lr.message?' — '+esc(lr.message):''}`:''}
@@ -314,9 +317,9 @@ const okMark=(done,txt)=>done?`<span class="ok">✓</span> <small>${txt}</small>
 function vRender(){if(!$('#vis'))return;
   $('#vis').innerHTML=`
   <div class="step"><b class="n">۱</b><b>صفحه لیست</b> <small>(جایی که پزشکان زیر هم آمده‌اند؛ فقط برای پیدا کردن پروفایل‌ها)</small>
-    <div class="row" style="margin-top:6px;align-items:flex-start"><textarea id="v-url" dir="ltr" rows="2" style="flex:1;min-width:260px" placeholder="https://www.doctoreto.com/doctors/sari/gynecology" oninput="vcfg.list_url=this.value" onchange="vSave(true)">${esc(vcfg.list_url)}</textarea>
+    <div class="row" style="margin-top:6px;align-items:flex-start"><textarea id="v-url" dir="ltr" rows="4" style="flex:1;min-width:260px" placeholder="https://doctoreto.com/doctors/speciality/ob-gyn/city/sari&#10;https://doctoreto.com/doctors/speciality/cardiology/city/sari" oninput="vcfg.list_url=this.value" onchange="vSave(true)">${esc(vcfg.list_url)}</textarea>
       <span><label style="margin:0">حداکثر صفحه</label><input type="number" min="1" max="2000" style="width:90px" value="${vcfg.max_pages}" oninput="vcfg.max_pages=+this.value||200" onchange="vSave(true)"></span></div>
-    <small class="note" style="display:block;margin:4px 0 8px">هر خط یک آدرس (مثلاً یک تخصص در یک شهر). آدرس هیچ‌وقت خودکار عوض نمی‌شود.</small>
+    <small class="note" style="display:block;margin:4px 0 8px"><b>برای تخصص‌ها و شهرهای دیگر لازم نیست چیزی را دوباره انتخاب کنید:</b> آدرس صفحه لیستشان را در خط بعدی همین کادر بنویسید (هر خط یک آدرس). همه با همین تنظیمات صفحه پروفایل گرفته می‌شوند و در نتایج، هر آدرس دکمه جدای خودش را دارد. آدرس هیچ‌وقت خودکار عوض نمی‌شود.</small>
     <div class="frow" style="grid-template-columns:minmax(0,1fr) minmax(0,1.6fr) 30px"><b>🔗 لینک پروفایل</b>
       <span>${vcfg.link_sample?okMark(true,`${vcfg.link_count?fa(vcfg.link_count)+' پروفایل در صفحه اول · ':''}<span dir="ltr">${esc(dec(vcfg.link_sample).replace(/^https?:\/\/[^/]+/,'').slice(0,60))}</span>`):okMark(false,'روی اسم یا «مشاهده پروفایل» یکی از پزشکان در صفحه لیست کلیک کنید')}</span>
       ${vcfg.link_sample?`<button class="bad" onclick="vcfg.link_sample='';vcfg.link_count=0;vRender();vSave(true)" title="پاک کردن">✕</button>`:'<span></span>'}</div>

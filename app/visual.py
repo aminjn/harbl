@@ -20,6 +20,7 @@ from urllib.parse import parse_qsl, urlencode, urlparse, urlsplit, urlunsplit
 
 from . import db
 from .config import DATA_DIR
+from .extract import source_of
 from .har import host_allowed, is_tracker
 
 SESSIONS = DATA_DIR / "sessions"
@@ -408,6 +409,7 @@ def run_profiles(cat: dict, site: dict, progress, log) -> dict:
     delay, max_pages = max(site["delay_seconds"], 0), int(cfg.get("max_pages") or 200)
     stats = {"pages": 0, "rows": 0, "new": 0, "details": 0}
     profiles: list[str] = []
+    origin: dict[str, str] = {}  # profile -> its list address (the group in the panel)
     _dedupe_profiles(cat["id"], sample)
 
     with sync_playwright() as pw:
@@ -477,6 +479,8 @@ def run_profiles(cat: dict, site: dict, progress, log) -> dict:
                 if not new:  # past the last page
                     break
                 profiles.extend(new)
+                for h in new:
+                    origin[h] = source_of(base.replace("{page}", "1"))
                 stats["pages"] += 1
                 progress({**stats, "rows": len(profiles)})
 
@@ -504,7 +508,8 @@ def run_profiles(cat: dict, site: dict, progress, log) -> dict:
                 empty[f["name"]] += f["name"] not in row
             if row:
                 stats["rows"] += 1
-                stats["new"] += _save(cat["id"], [{**row, "__url": href}], "__url", href, single=True)
+                stats["new"] += _save(cat["id"], [{**row, "__url": href}], "__url", href, single=True,
+                                      source=origin.get(href))
             progress(stats)
         browser.close()
     stats["empty"] = {k: v for k, v in empty.items() if v}
@@ -695,8 +700,10 @@ def run(cat: dict, site: dict, progress, log) -> dict:
     return stats
 
 
-def _save(category_id: int, rows: list[dict], link: str | None, url: str, single: bool = False) -> int:
-    new, ts, source = 0, db.now(), urlparse(url).path or "/"
+def _save(category_id: int, rows: list[dict], link: str | None, url: str, single: bool = False,
+          source: str | None = None) -> int:
+    """source: the group shown in the panel (profiles flow: which list address the profile came from)."""
+    new, ts = 0, db.now()
     with db.conn() as c:
         for row in rows:
             key = _key(row, link)
@@ -705,9 +712,11 @@ def _save(category_id: int, rows: list[dict], link: str | None, url: str, single
                 merged = {**json.loads(old["data"]), **{k: v for k, v in row.items() if v not in (None, "")}}
                 c.execute("UPDATE items SET data=?, source_url=?, last_seen=? WHERE id=?",
                           (json.dumps(merged, ensure_ascii=False), url, ts, old["id"]))
+                if source:
+                    c.execute("UPDATE items SET source=? WHERE id=?", (source, old["id"]))
             else:
                 # a single page is complete already: no detail page to visit
                 c.execute("INSERT INTO items(category_id, item_key, data, source_url, source, first_seen, last_seen, details_done) VALUES (?,?,?,?,?,?,?,?)",
-                          (category_id, key, json.dumps(row, ensure_ascii=False), url, "صفحه" if single else "لیست", ts, ts, "[v]" if single else ""))
+                          (category_id, key, json.dumps(row, ensure_ascii=False), url, source or ("صفحه" if single else "لیست"), ts, ts, "[v]" if single else ""))
                 new += 1
     return new

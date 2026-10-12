@@ -187,6 +187,7 @@ class CategoryIn(BaseModel):
     name: str = Field(min_length=1)
     max_pages: int = Field(200, ge=1, le=1000)
     mode: str | None = None
+    copy_from: int | None = None    # new section: take the profile picks (and the login) of this section
 
 
 def _cat_out(cat: dict) -> dict:
@@ -223,6 +224,15 @@ def create_category(site_id: int, body: CategoryIn):
         _get_site(c, site_id)
         cid = c.execute("INSERT INTO categories(site_id, name, max_pages, mode, created_at) VALUES (?,?,?,?,?)",
                         (site_id, body.name.strip(), body.max_pages, body.mode or "visual", db.now())).lastrowid
+        if body.copy_from:
+            src = _get_cat(c, body.copy_from)
+            if src["site_id"] == site_id and src.get("config"):
+                cfg = json.loads(src["config"])
+                cfg["list_url"] = ""  # only the list address differs (another specialty / city)
+                c.execute("UPDATE categories SET config=?, mode='visual' WHERE id=?", (json.dumps(cfg, ensure_ascii=False), cid))
+                sess = visual.session_file(body.copy_from)
+                if sess.exists():
+                    visual.session_file(cid).write_bytes(sess.read_bytes())
         return _cat_out(_get_cat(c, cid))
 
 
