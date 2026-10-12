@@ -267,13 +267,18 @@ function apiPanel(){return `<div id="har-stats"></div>
 
 // ----- point-and-click section -----
 let vcfg=null,vArm=null;
-const WHERE={list:'لیست (چند مورد زیر هم)',detail:'همان صفحه / پروفایل'},ATTR={text:'متن',href:'لینک',src:'عکس'};
-function vLoad(){const c=cat.config||{};vErr='';const fields=(c.fields||[]).map(f=>({...f}));
-  const li=fields.findIndex(f=>f.name===c.detail_link);
-  vcfg={list_url:c.list_url||'',max_pages:c.max_pages||200,item_selector:c.item_selector||'',
-    link:li>=0?fields.splice(li,1)[0]:null,click:c.detail_click?{selector:c.detail_click,sample:''}:null,
-    fields:fields.length?fields:[{name:'نام',page:'list',attr:'text'}],rules:c.rules||[],is_list:!!c.is_list,_cid:cat.id}}
-function vReady(){return vcfg&&vUrls().length&&(vcfg.item_selector&&vcfg.fields.some(f=>f.page==='list'&&f.rel)||vcfg.fields.some(f=>f.page==='detail'&&f.selector))}
+const ATTR={text:'متن',href:'لینک',src:'عکس'};
+// Two parts: 1) list page = only where the profile links are (+ optional "next page" button)
+//            2) a profile page = every field is picked here and read on each profile
+function vLoad(){const c=cat.config||{};vErr='';
+  const fields=(c.fields||[]).filter(f=>f.name&&f.name!==c.detail_link).map(f=>({...f}));
+  vcfg={list_url:c.list_url||'',max_pages:c.max_pages||200,link_sample:c.link_sample||'',link_count:c.link_count||0,
+    next_selectors:c.next_selectors||[],profile_url:c.profile_url||'',
+    click:c.detail_click?{selector:c.detail_click}:null,
+    fields:fields.length?fields:[{name:'نام',attr:'text'},{name:'تخصص',attr:'text'},{name:'تلفن',attr:'text'}],
+    rules:c.rules||[],_cid:cat.id}}
+const vPicked=f=>!!(f.selector||(f.selectors||[]).length);
+function vReady(){return vcfg&&vUrls().length&&vcfg.link_sample&&vcfg.fields.some(f=>f.name.trim()&&vPicked(f))}
 const FA_D='۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩';
 function vClean(v,f){if(typeof v!=='string')return v;
   if(f.after&&v.includes(f.after))v=v.split(f.after).slice(1).join(f.after);
@@ -299,48 +304,49 @@ function vEditor(i){const f=vcfg.fields[i];const raw=f.raw??f.sample??'';
     <p class="note" style="margin:6px 0 0">نمونه: <span dir="auto">${esc(raw||'— هنوز انتخاب نشده')}</span><br>نتیجه: <b id="v-prev-${i}" dir="auto">${esc(vClean(raw,f)||'—')}</b></p>
     <div class="row" style="margin-top:6px"><button class="pri" onclick="vEdit=-1;vRender();vSave()">تأیید</button></div></div>`}
 function vPrev(i){const f=vcfg.fields[i],e=$('#v-prev-'+i);if(e)e.textContent=vClean(f.raw??f.sample??'',f)||'—'}
-function vStatus(f,where){const ok=where==='list'?f.rel:f.selector;
-  const shown=vClean(f.raw??f.sample??'',f);
-  return ok?`<span class="ok">✓</span> <small title="${esc(shown)}">${f.count?esc(f.count)+' · ':''}${esc((shown||'').slice(0,40))}</small>`:'<small class="failed">هنوز انتخاب نشده</small>'}
+function vStatus(f){const shown=vClean(f.raw??f.sample??'',f);
+  return vPicked(f)?`<span class="ok">✓</span> <small title="${esc(shown)}">${esc((shown||'').slice(0,50))}</small>`:'<small class="failed">هنوز انتخاب نشده</small>'}
 const vUrls=()=>vcfg.list_url.split('\n').map(u=>u.trim()).filter(Boolean);
-// a list = many items one under another (search results): marked by the checkbox, or an address with {page}
-const vPaged=()=>vcfg.is_list||vUrls().some(u=>u.includes('{page}'));
-function vRender(){if(!$('#vis'))return;const needDetail=vPaged();
+const okMark=(done,txt)=>done?`<span class="ok">✓</span> <small>${txt}</small>`:`<small class="failed">${txt}</small>`;
+function vRender(){if(!$('#vis'))return;
   $('#vis').innerHTML=`
-  <div class="step"><b class="n">۱</b>آدرس صفحه‌ها (هر خط یک آدرس)
-    <div class="row" style="margin-top:6px;align-items:flex-start"><textarea id="v-url" dir="ltr" rows="3" style="flex:1;min-width:260px" placeholder="https://drdr.ir/dr/145652/...&#10;https://drdr.ir/specialties/obstetrics-and-gynecology?page={page}" oninput="vcfg.list_url=this.value">${esc(vcfg.list_url)}</textarea>
-      <span><label style="margin:0">حداکثر صفحه</label><input type="number" min="1" max="2000" style="width:90px" value="${vcfg.max_pages}" oninput="vcfg.max_pages=+this.value||200"></span></div>
-    <label style="margin-top:8px;font-size:14px;color:var(--ink)"><input type="checkbox" style="width:auto" ${vcfg.is_list?'checked':''} onchange="vcfg.is_list=this.checked;vRender();vSave(true)">
-      <b>این آدرس‌ها صفحه لیست هستند</b> (چند مورد زیر هم، مثل نتایج جستجوی پزشکان) — همه موارد لیست و همه صفحه‌های بعدی گرفته می‌شوند</label>
-    <small class="note" style="display:block;margin-top:6px"><b>لیست</b> (مثل «زنان و زایمان ساری»): آدرس صفحه نتایج را بگذارید و تیک بالا را بزنید؛ صفحه ۲، ۳… خودکار امتحان می‌شود (اگر آدرس صفحه ۲ فرق دارد، جای عددش <code dir="ltr">{page}</code> بنویسید).<br>
-      <b>صفحه تکی</b> (مثل پروفایل یک پزشک): همان آدرس بدون تیک؛ چند پروفایل = چند خط.</small>
+  <div class="step"><b class="n">۱</b><b>صفحه لیست</b> <small>(جایی که پزشکان زیر هم آمده‌اند؛ فقط برای پیدا کردن پروفایل‌ها)</small>
+    <div class="row" style="margin-top:6px;align-items:flex-start"><textarea id="v-url" dir="ltr" rows="2" style="flex:1;min-width:260px" placeholder="https://www.doctoreto.com/doctors/sari/gynecology" oninput="vcfg.list_url=this.value" onchange="vSave(true)">${esc(vcfg.list_url)}</textarea>
+      <span><label style="margin:0">حداکثر صفحه</label><input type="number" min="1" max="2000" style="width:90px" value="${vcfg.max_pages}" oninput="vcfg.max_pages=+this.value||200" onchange="vSave(true)"></span></div>
+    <small class="note" style="display:block;margin:4px 0 8px">هر خط یک آدرس (مثلاً یک تخصص در یک شهر). آدرس هیچ‌وقت خودکار عوض نمی‌شود.</small>
+    <div class="frow" style="grid-template-columns:minmax(0,1fr) minmax(0,1.6fr) 30px"><b>🔗 لینک پروفایل</b>
+      <span>${vcfg.link_sample?okMark(true,`${vcfg.link_count?fa(vcfg.link_count)+' پروفایل در صفحه اول · ':''}<span dir="ltr">${esc(dec(vcfg.link_sample).replace(/^https?:\/\/[^/]+/,'').slice(0,60))}</span>`):okMark(false,'روی اسم یا «مشاهده پروفایل» یکی از پزشکان در صفحه لیست کلیک کنید')}</span>
+      ${vcfg.link_sample?`<button class="bad" onclick="vcfg.link_sample='';vcfg.link_count=0;vRender();vSave(true)" title="پاک کردن">✕</button>`:'<span></span>'}</div>
+    <div class="frow" style="grid-template-columns:minmax(0,1fr) minmax(0,1.6fr) 30px"><b>⏭ دکمه صفحه بعد <small>(اختیاری)</small></b>
+      <span>${vcfg.next_selectors.length?okMark(true,'انتخاب شد'):'<small>ندارد — صفحه‌های بعد با <code dir="ltr">?page=2</code> و … امتحان می‌شوند</small>'}</span>
+      ${vcfg.next_selectors.length?`<button class="bad" onclick="vcfg.next_selectors=[];vRender();vSave(true)" title="پاک کردن">✕</button>`:'<span></span>'}</div>
+    <div class="row" style="margin-top:8px"><button class="pri" onclick="vOpen('list')">🎯 باز کردن صفحه لیست</button></div>
   </div>
-  <div class="step"><b class="n">۲</b>چه اطلاعاتی می‌خواهید؟ (اسم بگذارید و بگویید کجاست)
-    ${vPaged()&&!vcfg.link?.rel&&vcfg.fields.some(f=>f.page==='detail'&&f.selector)?'<p class="note warn" style="margin:6px 0">بعضی اطلاعات «پروفایل» هستند ولی «لینک پروفایل هر مورد» هنوز انتخاب نشده؛ بدون آن پروفایل‌ها باز نمی‌شوند. در صفحه لیست روی «مشاهده پروفایل» کارت اول انتخابش کنید. اگر این اطلاعات روی خود کارت‌های لیست است، با ↺ پاکش کنید و در صفحه لیست دوباره انتخاب کنید.</p>':''}
-    <div style="margin-top:6px">${vcfg.fields.map((f,i)=>`<div class="frow" style="grid-template-columns:minmax(0,1fr) 190px 90px minmax(0,1.3fr) 30px 30px 30px">
-      <input type="text" value="${esc(f.name)}" placeholder="مثلاً نام، تخصص، تلفن" oninput="vcfg.fields[${i}].name=this.value">
-      <select onchange="vcfg.fields[${i}].page=this.value;vRender()">${Object.entries(WHERE).map(([k,v])=>`<option value="${k}" ${f.page===k?'selected':''}>${v}</option>`).join('')}</select>
-      <select onchange="vcfg.fields[${i}].attr=this.value">${Object.entries(ATTR).map(([k,v])=>`<option value="${k}" ${f.attr===k?'selected':''}>${v}</option>`).join('')}</select>
-      <span>${vStatus(f,f.page)}</span><button onclick="vReset(${i})" title="پاک کردن انتخاب (برای انتخاب دوباره)">↺</button><button onclick="vEdit=vEdit===${i}?-1:${i};vRender()" title="ویرایش متن (حذف/جایگزینی کلمه)">✎</button><button class="bad" onclick="vcfg.fields.splice(${i},1);vEdit=-1;vRender()" title="حذف">✕</button></div>${vEdit===i?vEditor(i):''}`).join('')}
+  <div class="step"><b class="n">۲</b><b>صفحه پروفایل</b> <small>(همه اطلاعات از اینجا خوانده می‌شود؛ برای هر پزشک)</small>
+    <label style="margin-top:6px">آدرس یک پروفایل نمونه <small>(خالی = همان پروفایلی که در قسمت ۱ انتخاب کردید)</small></label>
+    <input id="v-prof" dir="ltr" value="${esc(vcfg.profile_url)}" placeholder="${esc(vcfg.link_sample||'https://www.doctoreto.com/doctor/...')}" oninput="vcfg.profile_url=this.value.trim()" onchange="vSave(true)">
+    <div style="margin-top:8px">${vcfg.fields.map((f,i)=>`<div class="frow" style="grid-template-columns:minmax(0,1fr) 90px minmax(0,1.4fr) 30px 30px 30px">
+      <input type="text" value="${esc(f.name)}" placeholder="مثلاً نام، تخصص، تلفن، آدرس" oninput="vcfg.fields[${i}].name=this.value" onchange="vSave(true)">
+      <select onchange="vcfg.fields[${i}].attr=this.value;vSave(true)">${Object.entries(ATTR).map(([k,v])=>`<option value="${k}" ${(f.attr||'text')===k?'selected':''}>${v}</option>`).join('')}</select>
+      <span>${vStatus(f)}</span><button onclick="vReset(${i})" title="پاک کردن انتخاب (برای انتخاب دوباره)">↺</button><button onclick="vEdit=vEdit===${i}?-1:${i};vRender()" title="ویرایش متن (حذف/جایگزینی کلمه)">✎</button><button class="bad" onclick="vcfg.fields.splice(${i},1);vEdit=-1;vRender();vSave(true)" title="حذف">✕</button></div>${vEdit===i?vEditor(i):''}`).join('')}
     </div>
-    <button style="margin-top:6px" onclick="vcfg.fields.push({name:'',page:'list',attr:'text'});vRender()">+ اطلاعات جدید</button>
+    <button style="margin-top:6px" onclick="vcfg.fields.push({name:'',attr:'text'});vRender()">+ اطلاعات جدید</button>
+    <div class="frow" style="grid-template-columns:minmax(0,1fr) minmax(0,1.6fr) 30px;margin-top:6px"><b>🔘 دکمه نمایش <small>(اختیاری؛ مثل «نمایش شماره»)</small></b>
+      <span>${vcfg.click?okMark(true,'انتخاب شد؛ قبل از خواندن هر پروفایل زده می‌شود'):'<small>ندارد</small>'}</span>
+      ${vcfg.click?`<button class="bad" onclick="vcfg.click=null;vRender();vSave(true)">✕</button>`:'<span></span>'}</div>
     <details style="margin-top:8px" ${(vcfg.rules||[]).length?'open':''}><summary>قانون جایگزینی برای همه اطلاعات این بخش (${fa((vcfg.rules||[]).length)})</summary>
       <label>هر خط یک قانون: <b>کلمه = جایگزین</b> — هر جا این کلمه بود، با جایگزینش عوض می‌شود (جایگزین خالی = حذف)</label>
       <textarea rows="3" placeholder="متخصص = تخصص&#10;ي = ی&#10;ك = ک" oninput="vcfg.rules=parsePairs(this.value);vcfg.fields.forEach((f,i)=>vPrev(i))" onchange="vSave(true)">${esc(pairsText(vcfg.rules))}</textarea>
       <small class="note" style="display:block;margin-top:4px">این قانون‌ها و ویرایش‌های ✎ روی همه داده‌های قبلی هم فوراً اعمال می‌شوند؛ لازم نیست دوباره جمع‌آوری کنید.</small></details>
-    ${needDetail?`<div class="frow" style="grid-template-columns:minmax(0,1fr) minmax(0,1.3fr);margin-top:8px"><b>🔗 لینک پروفایل هر مورد</b><span>${vcfg.link?vStatus(vcfg.link,'list'):'<small>اگر اطلاعاتی داخل پروفایل‌ها می‌خواهید: در صفحه لیست روی «مشاهده پروفایل» یا اسم یک مورد انتخاب کنید</small>'}</span></div>`:''}
-    ${vPaged()||vcfg.fields.some(f=>f.page==='detail')?`<div class="frow" style="grid-template-columns:minmax(0,1fr) minmax(0,1.3fr) 30px"><b>🔘 دکمه قبل از خواندن جزئیات <small>(اختیاری؛ مثل «نمایش شماره»)</small></b><span>${vcfg.click?'<span class="ok">✓</span> انتخاب شد':'<small>ندارد</small>'}</span>${vcfg.click?'<button class="bad" onclick="vcfg.click=null;vRender()">✕</button>':''}</div>`:''}
+    <div class="row" style="margin-top:8px"><button class="pri" onclick="vOpen('profile')">🎯 باز کردن صفحه پروفایل</button><button onclick="vSave()">ذخیره تنظیمات</button></div>
   </div>
-  <div class="step"><b class="n">۳</b>روی صفحه نشان بدهید هر اطلاعات کجاست
-    <div class="row" style="margin-top:6px"><button class="pri big" onclick="vOpen()">🎯 باز کردن سایت و انتخاب روی صفحه</button><button onclick="vSave()">ذخیره تنظیمات</button></div>
-    <p id="v-err" class="note warn ${vErr?'':'hidden'}" style="margin-top:8px">${vErr}</p>
-    <small class="note" style="display:block;margin-top:6px">سایت داخل همین صفحه باز می‌شود. اگر لازم است اول لاگین کنید. بعد بالای پنجره روی اسم هر اطلاعات بزنید و روی همان چیز در صفحه کلیک کنید (مثلاً روی اسم اولین پزشک). برای اطلاعات «صفحه جزئیات»، یک مورد را باز کنید و آنجا انتخاب کنید.</small>
-  </div>`}
-function vReset(i){const f=vcfg.fields[i];['rel','rel_tags','rels','selector','selectors','raw','sample','at'].forEach(k=>delete f[k]);f.count='';f.page='list';vRender();vSave(true)}
-function vPayload(){const fields=vcfg.fields.filter(f=>f.name.trim()).map(f=>({...f,name:f.name.trim()}));
-  if(vcfg.link&&fields.some(f=>f.page==='detail'))fields.push({...vcfg.link,name:'لینک صفحه',page:'list',attr:'href'});
-  return {list_url:vcfg.list_url,max_pages:vcfg.max_pages,item_selector:vcfg.item_selector,fields,
-    detail_link:vcfg.link&&fields.some(f=>f.page==='detail')?'لینک صفحه':null,detail_click:vcfg.click?.selector||null,rules:vcfg.rules||[],is_list:!!vcfg.is_list}}
+  <p id="v-err" class="note warn ${vErr?'':'hidden'}">${vErr}</p>
+  <small class="note" style="display:block">بقیه کار خودکار است: «▶ گرفتن داده» همه صفحه‌های لیست را می‌رود، لینک همه پروفایل‌ها را جمع می‌کند و از تک‌تک پروفایل‌ها همین اطلاعات را برمی‌دارد. اگر شماره نیاز به لاگین دارد، یک بار در همین مرورگر لاگین کنید و «پایان و ذخیره» بزنید.</small>`}
+function vReset(i){const f=vcfg.fields[i];['rel','rel_tags','rels','selector','selectors','raw','sample','at','count'].forEach(k=>delete f[k]);vRender();vSave(true)}
+function vPayload(){const fields=vcfg.fields.filter(f=>f.name.trim()).map(f=>({...f,name:f.name.trim(),page:'detail'}));
+  return {flow:'profiles',list_url:vcfg.list_url,max_pages:vcfg.max_pages,item_selector:'',fields,detail_link:null,
+    detail_click:vcfg.click?.selector||null,rules:vcfg.rules||[],is_list:true,
+    profile_url:vcfg.profile_url||'',link_sample:vcfg.link_sample||'',link_count:vcfg.link_count||0,next_selectors:vcfg.next_selectors||[]}}
 let vErr='';
 function vShowErr(){const e=$('#v-err');if(e){e.innerHTML=vErr;e.classList.toggle('hidden',!vErr)}}
 async function vSave(quiet){if(!vcfg||vcfg._cid!==cat?.id)return;
@@ -350,68 +356,57 @@ async function vSave(quiet){if(!vcfg||vcfg._cid!==cat?.id)return;
     if(!quiet)toast('ذخیره شد');const b=$('#btn-run');if(b)b.disabled=!vReady();
     if($('#data')&&cat.item_count)loadItems()}
   catch(err){vErr='ذخیره نشد: '+esc(err.message)+' — تنظیمات روی صفحه می‌ماند؛ مشکل را رفع کنید و دوباره «ذخیره تنظیمات» را بزنید.';vShowErr();toast('ذخیره نشد: '+err.message)}}
-async function vOpen(){await vSave(true);
-  const url=vUrls()[0]?vUrls()[0].replace('{page}','1'):`https://${cur.allowed_domains[0]}/`;toast('در حال باز کردن مرورگر…');
-  try{const r=await jpost(`/api/categories/${cat.id}/recorder/start`,{url,record_har:false});if(r.warning)toast('صفحه کامل باز نشد؛ ادامه دهید');recOpen(r.url)}
+function vAddr(which){if(which==='profile')return vcfg.profile_url||vcfg.link_sample||'';
+  return vUrls()[0]?vUrls()[0].replace('{page}','1'):''}
+// open the list or the sample profile; when the browser is already open just go there
+async function vOpen(which){await vSave(true);let url=vAddr(which);
+  if(!url){toast(which==='list'?'اول آدرس صفحه لیست را بنویسید':'آدرس پروفایل نمونه را بنویسید یا در قسمت ۱ «لینک پروفایل» را انتخاب کنید');
+    if(which==='list'||!$('#rec').classList.contains('hidden'))return;url=`https://${cur.allowed_domains[0]}/`}
+  if(!$('#rec').classList.contains('hidden')){recIn({type:'goto',url});vBar();return}
+  toast('در حال باز کردن مرورگر…');
+  try{const st=await api('/api/recorder');
+    if(st.active&&st.category_id===cat.id){recOpen(st.url);recIn({type:'goto',url});return}
+    const r=await jpost(`/api/categories/${cat.id}/recorder/start`,{url,record_har:false});if(r.warning)toast('صفحه کامل باز نشد؛ ادامه دهید');recOpen(r.url)}
   catch(err){toast(err.message)}}
-// chips above the remote browser: arm one, then click the element on the page
+// chips above the remote browser, in two groups: arm one, then click the element on the page
 function vBar(){const bar=$('#rec-pick');if(!vcfg||cat?.mode!=='visual'){bar.innerHTML='';return}
   const chip=(key,label,done)=>`<button class="chip ${vArm===key?'on':''}" onclick="vArmSet('${key}')">${done?'✓ ':'🎯 '}${esc(label)}</button>`;
-  const hasPage=true,needDetail=vPaged();  // both chips are needed before the profile fields exist
-  const lastName=vLast&&(vLast.k==='link'?'لینک':vLast.k==='click'?'دکمه':vcfg.fields[+vLast.k.slice(1)]?.name);
-  const size=vLast&&!vArm&&vLast.k!=='click'?`<span style="margin-inline-start:12px">کادر «${esc(lastName||'')}»: <button onclick="vResize(1)" title="کادر دربرگیرنده">⬆ بزرگ‌تر</button><button onclick="vResize(-1)">⬇ کوچک‌تر</button></span>`:'';
-  const modeSw=vArm&&vArm!=='click'?`<span style="margin-inline-start:12px">حالت: <button class="chip ${vMode==='exact'?'on':''}" onclick="vMode='exact';vBar()">✎ دقیق (همان خط/کلمه)</button><button class="chip ${vMode==='box'?'on':''}" onclick="vMode='box';vBar()">▢ کل باکس</button></span>`:'';
-  bar.innerHTML=`<span>${vArm?'<b>حالا روی همان چیز در صفحه کلیک کنید</b> (برای لغو دوباره روی دکمه بزنید)':'انتخاب کنید: '}</span>`
-    +vcfg.fields.map((f,i)=>f.name.trim()?chip('f'+i,f.name+(f.page==='detail'?' (جزئیات)':''),f.page==='list'?f.rel:f.selector):'').join('')
-    +(needDetail?chip('link','لینک صفحه جزئیات',vcfg.link?.rel):'')+(hasPage?chip('click','دکمه نمایش (اختیاری)',vcfg.click):'')+size+modeSw}
+  const nav=(w,label)=>`<button onclick="vOpen('${w}')" title="رفتن به این صفحه">${label}</button>`;
+  const lastName=vLast&&vcfg.fields[+String(vLast.k).slice(1)]?.name;
+  const size=vLast&&!vArm&&String(vLast.k).startsWith('f')?`<span style="margin-inline-start:12px">کادر «${esc(lastName||'')}»: <button onclick="vResize(1)" title="کادر دربرگیرنده">⬆ بزرگ‌تر</button><button onclick="vResize(-1)">⬇ کوچک‌تر</button></span>`:'';
+  const modeSw=vArm&&vArm.startsWith('f')?`<span style="margin-inline-start:12px">حالت: <button class="chip ${vMode==='exact'?'on':''}" onclick="vMode='exact';vBar()">✎ دقیق (همان خط/کلمه)</button><button class="chip ${vMode==='box'?'on':''}" onclick="vMode='box';vBar()">▢ کل باکس</button></span>`:'';
+  bar.innerHTML=(vArm?'<span><b>حالا روی همان چیز در صفحه کلیک کنید</b> (برای لغو دوباره روی دکمه بزنید)</span>':'')
+    +`<span style="border:1px solid var(--line);border-radius:8px;padding:2px 6px"><b>۱ صفحه لیست:</b> ${nav('list','↪ برو')}${chip('link','لینک پروفایل',vcfg.link_sample)}${chip('next','دکمه صفحه بعد (اختیاری)',vcfg.next_selectors.length)}</span>`
+    +`<span style="border:1px solid var(--line);border-radius:8px;padding:2px 6px"><b>۲ صفحه پروفایل:</b> ${nav('profile','↪ برو')}`
+    +vcfg.fields.map((f,i)=>f.name.trim()?chip('f'+i,f.name,vPicked(f)):'').join('')+chip('click','دکمه نمایش (اختیاری)',vcfg.click)+'</span>'+size+modeSw}
 function vArmSet(k){vArm=vArm===k?null:k;vHlHide();vBar()}
 // ----- live outline: what a click would take -----
 let vMode='exact',vHovTimer=null,vHovBusy=false;
-function vTarget(k){if(k==='link')return {where:'list',attr:'href'};if(k==='click')return {where:'detail',attr:'click'};
-  const f=vcfg.fields[+k.slice(1)];return {where:onListPage()?'list':'detail',attr:f.attr||'text'}}
-async function vHover(x,y){if(!vArm)return null;const t=vTarget(vArm);
-  return jpost('/api/recorder/hover',{x,y,mode:vArm==='click'?'exact':vMode,where:t.where,item_selector:t.where==='list'?vcfg.item_selector:null,attr:t.attr}).catch(()=>null)}
+function vTarget(k){if(k==='link')return 'href';if(k==='click'||k==='next')return 'click';return vcfg.fields[+k.slice(1)]?.attr||'text'}
+async function vHover(x,y){if(!vArm)return null;
+  return jpost('/api/recorder/hover',{x,y,mode:vArm.startsWith('f')?vMode:'exact',where:'detail',item_selector:null,attr:vTarget(vArm)}).catch(()=>null)}
 function vHlShow(h){const hl=$('#rec-hl'),img=$('#rec-img');if(!h||!vArm){vHlHide();return}
   const k=img.clientWidth/1280;Object.assign(hl.style,{left:h.x*k+'px',top:h.y*k+'px',width:h.w*k+'px',height:h.h*k+'px'});
   hl.firstElementChild.textContent=h.text||'(بدون متن)';hl.classList.remove('hidden')}
 function vHlHide(){$('#rec-hl')?.classList.add('hidden')}
-// is the remote browser on the list page (same address as the list URL, any page number)?
-function onListPage(){const u=$('#rec-url').value;
-  return vUrls().filter(l=>vcfg.is_list||l.includes('{page}')).some(l=>{try{const a=new URL(u),b=new URL(l.replace('{page}','1'));
-    return a.host.replace(/^www\./,'')===b.host.replace(/^www\./,'')&&decodeURIComponent(a.pathname).replace(/\/$/,'')===decodeURIComponent(b.pathname).replace(/\/$/,'')}catch{return false}})}
-let vLast=null;  // last pick: {k,x,y,up} for the bigger/smaller buttons
+let vLast=null;  // last field pick: {k,x,y,up} for the bigger/smaller buttons
 async function vResize(d){if(!vLast)return;const up=Math.max(0,vLast.up+d);if(up===vLast.up&&d<0)return toast('کوچک‌تر از این نمی‌شود');
   vArm=vLast.k;await vPick(vLast.x,vLast.y,up)}
-function onAddressPage(){const u=$('#rec-url').value;
-  return vUrls().some(l=>{try{const a=new URL(u),b=new URL(l.replace('{page}','1'));
-    return a.host.replace(/^www\./,'')===b.host.replace(/^www\./,'')&&decodeURIComponent(a.pathname).replace(/\/$/,'')===decodeURIComponent(b.pathname).replace(/\/$/,'')}catch{return false}})}
 async function vPick(x,y,up=0){const k=vArm;vArm=null;
-  const f=k==='link'?{page:'list',attr:'href'}:k==='click'?{page:'detail',attr:'click'}:vcfg.fields[+k.slice(1)];
-  const onList=onListPage();
-  if(k==='link'&&!onList){toast('«لینک صفحه جزئیات» را در صفحه لیست (آدرس دارای {page}) انتخاب کنید');vBar();return}
-  // the place is automatic: on a {page} list address = list cards, anywhere else = exactly what was clicked on this page
-  if(k!=='link'&&k!=='click'){const where=onList?'list':'detail';
-    if(f.page!==where){f.page=where;delete f.rel;delete f.rel_tags;delete f.selector;f.count=''}}
-  try{const r=await jpost('/api/recorder/pick',{x,y,up,where:f.page,item_selector:f.page==='list'?vcfg.item_selector:null,attr:f.attr||'text'});
+  try{const r=await jpost('/api/recorder/pick',{x,y,up,where:'detail',item_selector:null,attr:vTarget(k)});
     if(r.error){toast(r.error);vBar();return}
-    // clicked inside a repeated card on the section's own address: it is a results list, switch automatically
-    if(f.page==='detail'&&k!=='click'&&k!=='link'&&r.list_hint&&!vcfg.is_list&&onAddressPage()){
-      vcfg.is_list=true;f.page='list';
-      // fields picked earlier on this same page were read as single items: they need picking again on the list
-      vcfg.fields.forEach(x=>{if(x!==f&&x.page==='detail'&&x.at&&x.at===new URL($('#rec-url').value).pathname){x.page='list';delete x.selector;x.count=''}});
-      toast(`لیست تشخیص داده شد (${fa(r.list_hint)} مورد در این صفحه): از این به بعد اطلاعات این صفحه از همه موارد خوانده می‌شود`);
-      vArm=k;vRender();return vPick(x,y,up)}
-    vLast={k,x,y,up};
-    if(f.page==='list'){
-      if(vcfg.item_selector&&r.item_selector!==vcfg.item_selector){  // a different list: earlier list picks are void
-        vcfg.fields.forEach(x=>{if(x.page==='list'){delete x.rel;delete x.rel_tags;delete x.rels}});if(vcfg.link){delete vcfg.link.rel;delete vcfg.link.rels}
-        toast('لیست جدید تشخیص داده شد؛ بقیه اطلاعات صفحه لیست را دوباره انتخاب کنید')}
-      vcfg.item_selector=r.item_selector;
-      const v={rel:r.rel,rel_tags:r.rel_tags,rels:r.rels,count:`${fa(r.filled)} از ${fa(r.count)}`,raw:r.samples[0]||''};
-      if(k==='link')vcfg.link={name:'لینک صفحه',page:'list',attr:'href',...v};else Object.assign(f,v);
-      toast(`${fa(r.count)} مورد در این صفحه پیدا شد · نمونه: ${(r.samples[0]||'—').slice(0,40)}`)}
-    else if(k==='click'){vcfg.click={selector:r.selector,sample:r.samples[0]};toast('دکمه انتخاب شد؛ حالا خودتان یک بار رویش کلیک کنید تا اطلاعات نمایش داده شود')}
-    else{Object.assign(f,{selector:r.selector,selectors:r.selectors,count:'',raw:r.samples[0]||'',at:(()=>{try{return new URL($('#rec-url').value).pathname}catch{return ''}})()});toast(`انتخاب شد: ${(r.samples[0]||'—').slice(0,50)}`)}
+    if(k==='link'){const href=r.samples[0]||'';
+      if(!href){toast('اینجا لینک نیست؛ روی اسم پزشک یا «مشاهده پروفایل» کلیک کنید');vBar();return}
+      const l=await jpost('/api/recorder/links',{sample:href});
+      if(!l.links?.length){toast('لینک‌های مشابهی در این صفحه پیدا نشد؛ روی لینک خود پروفایل کلیک کنید');vBar();return}
+      vcfg.link_sample=href;vcfg.link_count=l.links.length;
+      toast(`${fa(l.links.length)} پروفایل در این صفحه پیدا شد`)}
+    else if(k==='next'){vcfg.next_selectors=r.selectors||[r.selector];toast('دکمه صفحه بعد انتخاب شد')}
+    else if(k==='click'){vcfg.click={selector:r.selector};toast('دکمه انتخاب شد؛ حالا خودتان یک بار رویش کلیک کنید تا اطلاعات نمایش داده شود')}
+    else{const f=vcfg.fields[+k.slice(1)];vLast={k,x,y,up};
+      Object.assign(f,{page:'detail',selector:r.selector,selectors:r.selectors,raw:r.samples[0]||''});
+      ['rel','rel_tags','rels','count'].forEach(x=>delete f[x]);
+      toast(`انتخاب شد: ${(r.samples[0]||'—').slice(0,50)}`)}
     vBar();vRender();vSave(true)}
   catch(err){toast(err.message);vBar()}
   setTimeout(recShot,200)}
@@ -507,7 +502,7 @@ let recTimer=null,recBusy=false;
 async function recStart(){const url=prompt('آدرس صفحه شروع (معمولاً صفحه لاگین یا صفحه اول سایت):',`https://${cur.allowed_domains[0]}/`);if(url===null)return;
   toast('در حال باز کردن مرورگر…');
   try{const r=await jpost(`/api/categories/${cat.id}/recorder/start`,{url});if(r.warning)toast('صفحه کامل باز نشد؛ ادامه دهید');recOpen(r.url)}catch(err){toast(err.message)}}
-const REC_HELP_VISUAL='روی تصویر کلیک کنید و تایپ کنید، درست مثل یک مرورگر. <b>۱.</b> اگر لازم است لاگین کنید و به صفحه لیست بروید <b>۲.</b> روی اسم یک اطلاعات در نوار زیر بزنید و بعد روی همان چیز در صفحه کلیک کنید (موارد پیدا‌شده قرمز می‌شوند) <b>۳.</b> برای اطلاعات «جزئیات» یک مورد را باز کنید و همان‌جا انتخاب کنید <b>۴.</b> «پایان و ذخیره» (ورود شما هم برای جمع‌آوری ذخیره می‌شود).';
+const REC_HELP_VISUAL='روی تصویر کلیک کنید و تایپ کنید، درست مثل یک مرورگر. اگر لازم است اول لاگین کنید. <b>صفحه لیست:</b> «لینک پروفایل» را بزنید و روی اسم یکی از پزشکان کلیک کنید؛ اگر سایت دکمه «صفحه بعد» دارد آن را هم انتخاب کنید. <b>صفحه پروفایل:</b> «↪ برو» را بزنید، بعد روی اسم هر اطلاعات (نام، تلفن…) و سپس روی همان چیز در صفحه کلیک کنید. آخر «پایان و ذخیره» (ورود شما هم ذخیره می‌شود).';
 let recHelpApi=null;
 function recOpen(url){vArm=null;vLast=null;vBar();recHelpApi??=$('#rec-help').innerHTML;$('#rec-help').innerHTML=cat?.mode==='visual'?REC_HELP_VISUAL:recHelpApi;$('#rec').classList.remove('hidden');$('#rec-url').value=url||'';$('#rec-img').focus();clearInterval(recTimer);recShot();recTimer=setInterval(recShot,700)}
 async function recShot(){if(recBusy)return;recBusy=true;

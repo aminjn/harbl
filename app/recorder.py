@@ -129,6 +129,10 @@ class Recorder:
         page = self._page()
         return await page.evaluate(visual.PICK_JS, [x, y, where, item_selector or None, attr, max(int(up), 0)])
 
+    async def links(self, sample: str) -> dict:
+        """Profile links on the open page that look like `sample` (see visual.LINKS_JS)."""
+        return await self._page().evaluate(visual.LINKS_JS, sample)
+
     async def hover(self, x: float, y: float, mode: str, where: str, item_selector: str | None, attr: str) -> dict | None:
         """What a click at (x, y) would pick, for the live outline in the panel (see visual.HOVER_JS)."""
         if not self.active:

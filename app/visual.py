@@ -180,6 +180,26 @@ HOVER_JS = r"""
 }
 """
 
+# Runs in the page: every link that looks like the sample profile link (same site, same address shape).
+# The shape keeps the first path part (e.g. /doctor/) and the number of parts; ids and names vary.
+LINKS_JS = r"""
+(sample) => {
+  const s = new URL(sample, location.href);
+  const parts = s.pathname.replace(/\/$/, '').split('/').filter(Boolean);
+  if (!parts.length) return {pattern: null, links: []};
+  const esc = t => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const pattern = '^/' + parts.map((p, i) => i === 0 ? esc(decodeURIComponent(p)) : '[^/]+').join('/') + '/?$';
+  const re = new RegExp(pattern), seen = new Set(), links = [];
+  for (const a of document.querySelectorAll('a[href]')) {
+    let u; try { u = new URL(a.href); } catch (_) { continue; }
+    if (u.host !== s.host || !re.test(decodeURIComponent(u.pathname))) continue;
+    const h = u.origin + u.pathname + u.search;
+    if (!seen.has(h)) { seen.add(h); links.push(h); }
+  }
+  return {pattern, links};
+}
+"""
+
 # Runs in the page before reading it: open "show more" style expanders (not links that navigate).
 EXPAND_JS = r"""
 () => { let n = 0;
@@ -272,6 +292,8 @@ def output_row(row: dict, cfg: dict) -> dict:
                 v = v.replace(a, b)
             v = v.strip()
         out[f["name"]] = v
+    if cfg.get("flow") == "profiles":
+        out["لینک پروفایل"] = row.get("__url")
     return out
 
 
@@ -296,11 +318,130 @@ def _key(row: dict, link_field: str | None) -> str:
     return "h:" + hashlib.sha1(json.dumps(row, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
 
 
+def run_profiles(cat: dict, site: dict, progress, log) -> dict:
+    """List pages only give profile links (by the shape of one picked link); every field is read on the profiles."""
+    from playwright.sync_api import TimeoutError as PwTimeout, sync_playwright
+
+    cfg = json.loads(cat.get("config") or "{}")
+    fields = [f for f in cfg.get("fields", []) if f.get("selector") or f.get("selectors")]
+    urls = [u.strip() for u in (cfg.get("list_url") or "").splitlines() if u.strip()]
+    sample = cfg.get("link_sample")
+    if not urls or not sample:
+        raise ValueError("در قسمت ۱ آدرس صفحه لیست را بدهید و «لینک پروفایل» را روی یکی از پزشکان انتخاب کنید")
+    if not fields:
+        raise ValueError("در قسمت ۲ هیچ اطلاعاتی روی صفحه پروفایل انتخاب نشده است")
+    delay, max_pages = max(site["delay_seconds"], 0), int(cfg.get("max_pages") or 200)
+    stats = {"pages": 0, "rows": 0, "new": 0, "details": 0}
+    profiles: list[str] = []
+
+    with sync_playwright() as pw:
+        browser = pw.chromium.launch(args=["--disable-dev-shm-usage"])
+        sess = session_file(cat["id"])
+        ctx = browser.new_context(viewport={"width": 1280, "height": 900}, locale="fa-IR",
+                                  storage_state=str(sess) if sess.exists() else None)
+        ctx.route("**/*", lambda r: r.abort() if r.request.resource_type != "document" and is_tracker(r.request.url) else r.continue_())
+        page = ctx.new_page()
+        opened = [0]
+
+        def open_(url: str) -> bool:
+            if not host_allowed(url, site["allowed_domains"]):
+                log({"url": url, "error": "دامنه خارج از قرارداد است؛ باز نشد"})
+                return False
+            if opened[0]:
+                time.sleep(delay)
+            opened[0] += 1
+            try:
+                page.goto(url, wait_until="domcontentloaded", timeout=45000)
+                return True
+            except Exception as e:
+                log({"url": url, "error": str(e)[:300]})
+                return False
+
+        def page_links() -> list[str]:
+            # wait for the links, then scroll until no new ones load
+            for _ in range(30):
+                if page.evaluate(LINKS_JS, sample)["links"]:
+                    break
+                page.wait_for_timeout(500)
+            seen = -1
+            for _ in range(25):
+                links = page.evaluate(LINKS_JS, sample)["links"]
+                if len(links) == seen:
+                    break
+                seen = len(links)
+                page.mouse.wheel(0, 20000)
+                page.wait_for_timeout(900)
+            return links
+
+        def click_next() -> bool:
+            for sel in cfg.get("next_selectors") or []:
+                try:
+                    loc = page.locator(sel).first
+                    if loc.count() and loc.is_visible() and loc.is_enabled():
+                        loc.click(timeout=5000)
+                        page.wait_for_timeout(1800)
+                        return True
+                except Exception:
+                    continue
+            return False
+
+        # 1) list pages: collect profile links
+        for base in urls:
+            if not open_(base.replace("{page}", "1")):
+                continue
+            for n in range(1, max_pages + 1):
+                if n > 1:
+                    moved = click_next() if cfg.get("next_selectors") else open_(page_url(base, n))
+                    if not moved:
+                        break
+                links = page_links()
+                new = [h for h in links if h not in profiles and host_allowed(h, site["allowed_domains"])]
+                log({"url": page.url, "links": len(links), "new": len(new)})
+                if not new:  # past the last page
+                    break
+                profiles.extend(new)
+                stats["pages"] += 1
+                progress({**stats, "rows": len(profiles)})
+
+        # 2) every profile: read the picked fields
+        for href in profiles:
+            if not open_(href):
+                continue
+            for sel in [s for f in fields[:1] for s in (f.get("selectors") or [f.get("selector")]) if s]:
+                try:
+                    page.wait_for_selector(sel, timeout=15000, state="attached")
+                    break
+                except PwTimeout:
+                    continue
+            if cfg.get("detail_click"):
+                try:
+                    page.click(cfg["detail_click"], timeout=5000)
+                    page.wait_for_timeout(1500)
+                except Exception:
+                    pass
+            try:
+                if page.evaluate(EXPAND_JS):
+                    page.wait_for_timeout(700)
+            except Exception:
+                pass
+            row = {k: v for k, v in page.evaluate(DETAIL_JS, fields).items() if v not in (None, "")}
+            log({"url": href, "found": len(row)})
+            stats["details"] += 1
+            if row:
+                stats["rows"] += 1
+                stats["new"] += _save(cat["id"], [{**row, "__url": href}], "__url", href, single=True)
+            progress(stats)
+        browser.close()
+    return stats
+
+
 def run(cat: dict, site: dict, progress, log) -> dict:
     """Read every address of the section. progress(stats); log(item) records each page opened.
 
     One address per line: with {page} it is a list walked page by page (then each record's detail
     page if detail fields are picked); without {page} it is a single page whose fields make one record."""
+    if json.loads(cat.get("config") or "{}").get("flow") == "profiles":
+        return run_profiles(cat, site, progress, log)
     from playwright.sync_api import TimeoutError as PwTimeout, sync_playwright
 
     cfg = json.loads(cat.get("config") or "{}")

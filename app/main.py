@@ -245,6 +245,11 @@ class VisualIn(BaseModel):
     detail_click: str | None = None
     rules: list = []                # [[word, replacement], ...] applied to every field
     is_list: bool = False           # the addresses are lists of many items (search results)
+    flow: str = ""                  # "profiles": list pages give profile links, fields are read on the profiles
+    profile_url: str = ""
+    link_sample: str = ""
+    link_count: int = 0
+    next_selectors: list = []
 
 
 @app.put("/api/categories/{cid}/visual", dependencies=[Depends(auth)])
@@ -271,7 +276,8 @@ def save_visual(cid: int, body: VisualIn):
         cfg = {"list_url": url, "max_pages": body.max_pages, "item_selector": body.item_selector, "fields": fields,
                "detail_link": body.detail_link or None, "detail_click": body.detail_click or None,
                "rules": [[str(r[0]), str(r[1])] for r in body.rules if isinstance(r, list) and len(r) >= 2 and str(r[0])],
-               "is_list": body.is_list}
+               "is_list": body.is_list, "flow": body.flow, "profile_url": body.profile_url.strip(),
+               "link_sample": body.link_sample.strip(), "link_count": body.link_count, "next_selectors": [str(x) for x in body.next_selectors if x]}
         # the picked fields are the output, so no separate field choice
         c.execute("UPDATE categories SET config=?, mode='visual', fields='[]' WHERE id=?", (json.dumps(cfg, ensure_ascii=False), cid))
         return {**_cat_out(_get_cat(c, cid)), "warnings": warnings}
@@ -391,6 +397,20 @@ async def recorder_hover(body: RecHover):
         return None  # page navigating: no outline this time
 
 
+class RecLinks(BaseModel):
+    sample: str
+
+
+@app.post("/api/recorder/links", dependencies=[Depends(auth)])
+async def recorder_links(body: RecLinks):
+    try:
+        return await recorder.links(body.sample)
+    except RecorderError as e:
+        raise HTTPException(409, str(e))
+    except Exception as e:
+        raise HTTPException(400, str(e))
+
+
 @app.post("/api/recorder/pick", dependencies=[Depends(auth)])
 async def recorder_pick(body: RecPick):
     try:
@@ -486,7 +506,8 @@ def _fields(cat: dict) -> list[dict]:
     try:
         if cat.get("mode") == "visual":
             cfg = json.loads(cat.get("config") or "{}")
-            return [{"key": f["name"], "label": ""} for f in cfg.get("fields", []) if f.get("name")]
+            cols = [{"key": f["name"], "label": ""} for f in cfg.get("fields", []) if f.get("name")]
+            return cols + ([{"key": "لینک پروفایل", "label": ""}] if cfg.get("flow") == "profiles" else [])
         return [f for f in json.loads(cat.get("fields") or "[]") if f.get("key")]
     except ValueError:
         return []
