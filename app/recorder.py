@@ -83,6 +83,14 @@ class Recorder:
 
     def _adopt_page(self, page):
         self.page = page
+        page.on("close", self._page_closed)
+
+    def _page_closed(self, page):
+        # a tab the site opened (e.g. a map) was closed: go back to the tab still open, not a dead one
+        if self.page is page and self.context:
+            alive = [p for p in self.context.pages if not p.is_closed()]
+            if alive:
+                self.page = alive[-1]
 
     async def goto(self, url: str):
         if not url.startswith(("http://", "https://")):
