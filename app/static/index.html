@@ -229,7 +229,7 @@ function lastRunText(lr){return lr?`آخرین اجرا ${fmt(lr.started_at)}: <
 function renderCat(){
   if(!cat){$('#cat').innerHTML='<div class="empty">هنوز بخشی ندارید. «+ بخش جدید» را بزنید (مثلاً «پزشکان»).</div>';return}
   const lr=cat.last_run,vis=cat.mode==='visual';
-  if(vis)vLoad();
+  if(vis&&(!vcfg||vcfg._cid!==cat.id))vLoad();
   const ready=vis?vReady():cat.request_count;
   $('#cat').innerHTML=`<div class="cat">
     <div class="row" style="justify-content:space-between">
@@ -268,11 +268,11 @@ function apiPanel(){return `<div id="har-stats"></div>
 // ----- point-and-click section -----
 let vcfg=null,vArm=null;
 const WHERE={list:'لیست (چند مورد زیر هم)',detail:'همان صفحه / پروفایل'},ATTR={text:'متن',href:'لینک',src:'عکس'};
-function vLoad(){const c=cat.config||{};const fields=(c.fields||[]).map(f=>({...f}));
+function vLoad(){const c=cat.config||{};vErr='';const fields=(c.fields||[]).map(f=>({...f}));
   const li=fields.findIndex(f=>f.name===c.detail_link);
   vcfg={list_url:c.list_url||'',max_pages:c.max_pages||200,item_selector:c.item_selector||'',
     link:li>=0?fields.splice(li,1)[0]:null,click:c.detail_click?{selector:c.detail_click,sample:''}:null,
-    fields:fields.length?fields:[{name:'نام',page:'list',attr:'text'}],rules:c.rules||[]}}
+    fields:fields.length?fields:[{name:'نام',page:'list',attr:'text'}],rules:c.rules||[],_cid:cat.id}}
 function vReady(){return vcfg&&vUrls().length&&(vcfg.item_selector&&vcfg.fields.some(f=>f.page==='list'&&f.rel)||vcfg.fields.some(f=>f.page==='detail'&&f.selector))}
 const FA_D='۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩';
 function vClean(v,f){if(typeof v!=='string')return v;
@@ -329,15 +329,22 @@ function vRender(){if(!$('#vis'))return;const needDetail=vPaged()&&vcfg.fields.s
   </div>
   <div class="step"><b class="n">۳</b>روی صفحه نشان بدهید هر اطلاعات کجاست
     <div class="row" style="margin-top:6px"><button class="pri big" onclick="vOpen()">🎯 باز کردن سایت و انتخاب روی صفحه</button><button onclick="vSave()">ذخیره تنظیمات</button></div>
+    <p id="v-err" class="note warn ${vErr?'':'hidden'}" style="margin-top:8px">${vErr}</p>
     <small class="note" style="display:block;margin-top:6px">سایت داخل همین صفحه باز می‌شود. اگر لازم است اول لاگین کنید. بعد بالای پنجره روی اسم هر اطلاعات بزنید و روی همان چیز در صفحه کلیک کنید (مثلاً روی اسم اولین پزشک). برای اطلاعات «صفحه جزئیات»، یک مورد را باز کنید و آنجا انتخاب کنید.</small>
   </div>`}
 function vPayload(){const fields=vcfg.fields.filter(f=>f.name.trim()).map(f=>({...f,name:f.name.trim()}));
   if(vcfg.link&&fields.some(f=>f.page==='detail'))fields.push({...vcfg.link,name:'لینک صفحه',page:'list',attr:'href'});
   return {list_url:vcfg.list_url,max_pages:vcfg.max_pages,item_selector:vcfg.item_selector,fields,
     detail_link:vcfg.link&&fields.some(f=>f.page==='detail')?'لینک صفحه':null,detail_click:vcfg.click?.selector||null,rules:vcfg.rules||[]}}
-async function vSave(quiet){try{const c=await jpost(`/api/categories/${cat.id}/visual`,vPayload(),'PUT');
-    cat.config=c.config;if(!quiet)toast('ذخیره شد');const b=$('#btn-run');if(b)b.disabled=!vReady();
-    if($('#data')&&cat.item_count)loadItems()}catch(err){toast(err.message)}}
+let vErr='';
+function vShowErr(){const e=$('#v-err');if(e){e.innerHTML=vErr;e.classList.toggle('hidden',!vErr)}}
+async function vSave(quiet){if(!vcfg||vcfg._cid!==cat?.id)return;
+  try{const c=await jpost(`/api/categories/${cat.id}/visual`,vPayload(),'PUT');
+    cat.config=c.config;vcfg.list_url=c.config.list_url;const ta=$('#v-url');if(ta&&document.activeElement!==ta)ta.value=vcfg.list_url;
+    vErr=(c.warnings||[]).map(esc).join('<br>');vShowErr();
+    if(!quiet)toast('ذخیره شد');const b=$('#btn-run');if(b)b.disabled=!vReady();
+    if($('#data')&&cat.item_count)loadItems()}
+  catch(err){vErr='ذخیره نشد: '+esc(err.message)+' — تنظیمات روی صفحه می‌ماند؛ مشکل را رفع کنید و دوباره «ذخیره تنظیمات» را بزنید.';vShowErr();toast('ذخیره نشد: '+err.message)}}
 async function vOpen(){await vSave(true);
   const url=vUrls()[0]?vUrls()[0].replace('{page}','1'):`https://${cur.allowed_domains[0]}/`;toast('در حال باز کردن مرورگر…');
   try{const r=await jpost(`/api/categories/${cat.id}/recorder/start`,{url,record_har:false});if(r.warning)toast('صفحه کامل باز نشد؛ ادامه دهید');recOpen(r.url)}

@@ -243,7 +243,7 @@ class VisualIn(BaseModel):
     fields: list[dict] = []
     detail_link: str | None = None
     detail_click: str | None = None
-    rules: list[list[str]] = []     # [[word, replacement], ...] applied to every field
+    rules: list = []                # [[word, replacement], ...] applied to every field
 
 
 @app.put("/api/categories/{cid}/visual", dependencies=[Depends(auth)])
@@ -252,20 +252,27 @@ def save_visual(cid: int, body: VisualIn):
     with db.conn() as c:
         cat = _get_cat(c, cid)
         site = _get_site(c, cat["site_id"])
-        lines = [u.strip() for u in body.list_url.splitlines() if u.strip()]
-        for u in lines:
-            if not (u.startswith(("http://", "https://")) and har.host_allowed(u.replace("{page}", "1"), site["allowed_domains"])):
-                raise HTTPException(400, f"این آدرس روی دامنه همین سایت نیست (با http/https بنویسید): {u[:80]}")
+        # never refuse to save over an address: fix what is obvious, warn about the rest
+        # (addresses outside the contract's domains are still never opened at run time)
+        lines, warnings = [], []
+        for u in (x.strip() for x in body.list_url.splitlines()):
+            if not u:
+                continue
+            if not u.startswith(("http://", "https://")):
+                u = "https://" + u.lstrip("/")
+            if not har.host_allowed(u.replace("{page}", "1"), site["allowed_domains"]):
+                warnings.append(f"این آدرس روی دامنه‌های این سایت ({'، '.join(site['allowed_domains'])}) نیست و اجرا نمی‌شود: {u[:80]}")
+            lines.append(u)
         url = "\n".join(lines)
         fields = [{k: f.get(k) for k in ("name", "page", "attr", "rel", "rel_tags", "selector", "count", "sample", "raw",
                                          "after", "before", "remove", "replace", "digits")}
                   for f in body.fields if str(f.get("name") or "").strip()]
         cfg = {"list_url": url, "max_pages": body.max_pages, "item_selector": body.item_selector, "fields": fields,
                "detail_link": body.detail_link or None, "detail_click": body.detail_click or None,
-               "rules": [[str(a), str(b)] for a, b in (r[:2] for r in body.rules if len(r) >= 2) if str(a)]}
+               "rules": [[str(r[0]), str(r[1])] for r in body.rules if isinstance(r, list) and len(r) >= 2 and str(r[0])]}
         # the picked fields are the output, so no separate field choice
         c.execute("UPDATE categories SET config=?, mode='visual', fields='[]' WHERE id=?", (json.dumps(cfg, ensure_ascii=False), cid))
-        return _cat_out(_get_cat(c, cid))
+        return {**_cat_out(_get_cat(c, cid)), "warnings": warnings}
 
 
 @app.delete("/api/categories/{cid}", dependencies=[Depends(auth)])
