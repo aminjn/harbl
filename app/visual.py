@@ -24,6 +24,37 @@ from .har import host_allowed, is_tracker
 
 SESSIONS = DATA_DIR / "sessions"
 
+# Coordinates ("lat,lng") for a "location" field: from the picked map/link (map links, map image or
+# iframe addresses, data-* attributes), else from the page's own data (Next.js data, JSON-LD, scripts).
+GEO_FN = r"""
+  const __geo = e => {
+    const fix = (a, b) => { a = +a; b = +b; if (!isFinite(a) || !isFinite(b) || (!a && !b)) return null;
+      if (Math.abs(a) > 90 || (a > 44 && a < 64 && b > 24 && b < 41)) [a, b] = [b, a];   // lng,lat order (Iran ranges)
+      return Math.abs(a) <= 90 && Math.abs(b) <= 180 ? a + ',' + b : null; };
+    const num = '(-?\\d{1,3}\\.\\d{3,})';
+    const inText = t => { if (!t) return null; t = String(t); try { t = decodeURIComponent(t); } catch (_) {}
+      let m = t.match(new RegExp('(?:lat|latitude)["\']?\\s*[:=]\\s*["\']?' + num + '[\\s\\S]{0,120}?(?:lng|lon|long|longitude)["\']?\\s*[:=]\\s*["\']?' + num, 'i'));
+      if (m) return fix(m[1], m[2]);
+      m = t.match(new RegExp('(?:lng|lon|long|longitude)["\']?\\s*[:=]\\s*["\']?' + num + '[\\s\\S]{0,120}?(?:lat|latitude)["\']?\\s*[:=]\\s*["\']?' + num, 'i'));
+      if (m) return fix(m[2], m[1]);
+      m = t.match(new RegExp(num + '\\s*(?:,|%2C|\\s)\\s*' + num));
+      return m ? fix(m[1], m[2]) : null; };
+    const fromData = x => { const d = x.dataset || {}, la = d.lat ?? d.latitude, lo = d.lng ?? d.lon ?? d.long ?? d.longitude;
+      return la != null && lo != null ? fix(la, lo) : null; };
+    const attrsOf = x => [...(x.attributes || [])].filter(a => /href|src|data-|style|onclick/i.test(a.name)).map(a => a.value);
+    if (e) {
+      for (const x of [e, ...e.querySelectorAll('a,img,iframe,[data-lat],[data-lng],[style*="background"],[href],[src]')].slice(0, 300))
+        { const g = fromData(x); if (g) return g; for (const v of attrsOf(x)) { const g = inText(v); if (g) return g; } }
+      for (let a = e.parentElement, i = 0; a && i < 4; a = a.parentElement, i++)
+        for (const v of attrsOf(a)) { const g = inText(v); if (g) return g; }
+    }
+    for (const x of document.querySelectorAll('a[href*="maps"],a[href*="waze"],a[href*="neshan"],a[href*="balad"],iframe[src*="map"],img[src*="map"]'))
+      { const g = inText(x.getAttribute('href') || x.getAttribute('src')); if (g) return g; }
+    for (const sc of document.querySelectorAll('script#__NEXT_DATA__,script[type="application/ld+json"],script:not([src])'))
+      { const g = inText((sc.textContent || '').slice(0, 2000000)); if (g) return g; }
+    return null; };
+"""
+
 # Runs in the page. Returns what is under (x, y) and selectors that find it again.
 PICK_JS = r"""
 ([x, y, where, itemSel, attr, up]) => {
@@ -57,7 +88,8 @@ PICK_JS = r"""
     const common = [...a.classList].filter(okClass).filter(k => same.filter(c => c.classList.contains(k)).length >= same.length * 0.6).slice(0, 3);
     const sel = a.tagName.toLowerCase() + common.map(k => '.' + esc(k)).join('');
     return {sel, list: same.filter(c => c.matches(sel))}; };
-  const value = e => attr === 'href' ? (e.closest('a')?.href || '') : attr === 'src' ? (e.currentSrc || e.src || '')
+  /*__GEO__*/
+  const value = e => attr === 'geo' ? (__geo(e) || '') : attr === 'href' ? (e.closest('a')?.href || '') : attr === 'src' ? (e.currentSrc || e.src || '')
                      : __txt(e);
   const mark = els => { document.querySelectorAll('.__pick').forEach(e => { e.classList.remove('__pick'); });
                         if (!document.getElementById('__pickcss')) { const st = document.createElement('style'); st.id = '__pickcss';
@@ -245,6 +277,8 @@ LIST_JS = r"""
 }); }
 """
 
+PICK_JS = PICK_JS.replace("/*__GEO__*/", GEO_FN)
+
 DETAIL_JS = r"""
 (fields) => {
   // readable text of an element without buttons, icons and "show more/less"-style controls
@@ -257,9 +291,11 @@ DETAIL_JS = r"""
       if (t && t.length < 30 && __ui.test(t)) x.remove(); });
     c.querySelectorAll('p,div,li,br,h1,h2,h3,h4,h5,h6,tr,section,article').forEach(x => x.append(' '));
     return (c.textContent || '').replace(/\s+/g, ' ').trim(); };
+  /*__GEO__*/
   const o = {};
   for (const f of fields) { let e = null;
     for (const sel of (f.selectors && f.selectors.length ? f.selectors : [f.selector])) { try { e = document.querySelector(sel); } catch (_) {} if (e) break; }
+    if (f.attr === 'geo') { o[f.name] = __geo(e); continue; }
     o[f.name] = !e ? null : f.attr === 'href' ? (e.closest('a')?.href || null) : f.attr === 'src' ? (e.currentSrc || e.src || null)
               : __txt(e);
     if (e && !o[f.name]) {  // a phone shown only as a tel: link
@@ -267,6 +303,7 @@ DETAIL_JS = r"""
       if (t) o[f.name] = decodeURIComponent(t.getAttribute('href').slice(4)); } }
   return o; }
 """
+DETAIL_JS = DETAIL_JS.replace("/*__GEO__*/", GEO_FN)
 
 
 FA_DIGITS = str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "01234567890123456789")
