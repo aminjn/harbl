@@ -368,10 +368,11 @@ def _key(row: dict, link_field: str | None) -> str:
 
 
 def _norm_profile(href: str, sample: str) -> str:
-    """One address per profile: no #fragment, no trailing slash, no ?query unless the sample link needs one."""
+    """One address per profile: no www., no #fragment, no trailing slash, no ?query unless the sample link needs one."""
     u = urlsplit(href)
     query = u.query if urlsplit(sample).query else ""
-    return urlunsplit((u.scheme, u.netloc.lower(), u.path.rstrip("/") or "/", query, ""))
+    host = u.netloc.lower().removeprefix("www.")  # www.site.com and site.com are the same profile
+    return urlunsplit((u.scheme, host, u.path.rstrip("/") or "/", query, ""))
 
 
 def _dedupe_profiles(category_id: int, sample: str):
@@ -383,15 +384,19 @@ def _dedupe_profiles(category_id: int, sample: str):
         kept: dict[str, dict] = {}
         for r in rows:  # newest first: an older copy of a profile goes
             key = "url:" + _norm_profile(r["item_key"][4:], sample)
-            if key in kept:
+            if key in kept:  # an older copy: its values only fill what the newest copy lacks
+                k = kept[key]
+                k["data"] = {**{a: b for a, b in json.loads(r["data"]).items() if b not in (None, "")}, **k["data"]}
+                k["changed"] = True
                 c.execute("DELETE FROM items WHERE id=?", (r["id"],))
             else:
-                kept[key] = r
+                kept[key] = {"id": r["id"], "item_key": r["item_key"],
+                             "data": {a: b for a, b in json.loads(r["data"]).items() if b not in (None, "")}, "changed": False}
         for key, r in kept.items():  # renamed only after the copies are gone (keys are unique)
-            if key != r["item_key"]:
-                data = json.loads(r["data"])
-                data["__url"] = key[4:]
-                c.execute("UPDATE items SET item_key=?, data=? WHERE id=?", (key, json.dumps(data, ensure_ascii=False), r["id"]))
+            if key != r["item_key"] or r["changed"]:
+                r["data"]["__url"] = key[4:]
+                c.execute("UPDATE items SET item_key=?, data=? WHERE id=?",
+                          (key, json.dumps(r["data"], ensure_ascii=False), r["id"]))
 
 
 def run_profiles(cat: dict, site: dict, progress, log) -> dict:

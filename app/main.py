@@ -292,6 +292,9 @@ def save_visual(cid: int, body: VisualIn):
                "link_sample": body.link_sample.strip(), "link_count": body.link_count, "click_selectors": [str(x) for x in body.click_selectors if x], "click_text": body.click_text.strip()[:80], "next_selectors": [str(x) for x in body.next_selectors if x]}
         # the picked fields are the output, so no separate field choice
         c.execute("UPDATE categories SET config=?, mode='visual', fields='[]' WHERE id=?", (json.dumps(cfg, ensure_ascii=False), cid))
+    if cfg.get("flow") == "profiles" and cfg.get("link_sample"):
+        visual._dedupe_profiles(cid, cfg["link_sample"])  # old/duplicate rows go right away, not only on the next run
+    with db.conn() as c:
         return {**_cat_out(_get_cat(c, cid)), "warnings": warnings}
 
 
