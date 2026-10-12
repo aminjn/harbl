@@ -308,6 +308,10 @@ def run_category(category_id: int, trigger: str = "manual") -> dict:
     return {"run_id": run_id, "status": status, "ok": ok, "fail": fail, "message": message}
 
 
+def _browser_died(e: Exception) -> bool:
+    return bool(visual.DEAD_BROWSER.search(str(e)))
+
+
 def _run_visual(cat: dict, site: dict, run_id: int, trigger: str) -> dict:
     """Point-and-click section: a real browser reads the picked fields page by page."""
     log: list[dict] = []
@@ -321,7 +325,18 @@ def _run_visual(cat: dict, site: dict, run_id: int, trigger: str) -> dict:
 
     try:
         check_contract(site)
-        stats = visual.run(cat, site, progress, log.append)
+        for attempt in range(4):
+            try:
+                stats = visual.run(cat, site, progress, log.append)
+                break
+            except Exception as e:
+                # the browser was closed or crashed mid-run: open a new one and continue from the saved progress
+                if attempt < 3 and _browser_died(e) and visual.progress_file(cat["id"]).exists() and site["id"] not in visual.STOP:
+                    log.append({"note": f"مرورگر بسته شد؛ ادامه از همان‌جا (بار {attempt + 1})"})
+                    print(f"[بخش {cat['id']}] مرورگر بسته شد؛ ادامه از همان‌جا", flush=True)
+                    time.sleep(5)
+                    continue
+                raise
         with db.conn() as c:
             total = c.execute("SELECT COUNT(*) FROM items WHERE category_id=?", (cat["id"],)).fetchone()[0]
         errors = sum(1 for x in log if x.get("error"))
@@ -343,7 +358,8 @@ def _run_visual(cat: dict, site: dict, run_id: int, trigger: str) -> dict:
     except (ScrapeBlocked, ValueError) as e:
         status, message = "failed", str(e)
     except Exception as e:
-        status, message = "failed", f"خطای داخلی: {e}"
+        status, message = "failed", ("مرورگر بسته شد (ری‌استارت سرور یا کمبود حافظه)؛ اجرای بعدی از همین‌جا ادامه می‌دهد"
+                                      if _browser_died(e) else f"خطای داخلی: {e}")
     out_dir = OUTPUT_DIR / f"site_{site['id']}" / f"cat_{cat['id']}"
     out_dir.mkdir(parents=True, exist_ok=True)
     out_file = out_dir / f"run_{run_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"

@@ -400,6 +400,7 @@ def _dedupe_profiles(category_id: int, sample: str):
 
 
 HEAVY = {"image", "media", "font"}
+DEAD_BROWSER = re.compile(r"has been closed|Target crashed|Browser closed|Connection closed|crashed")
 PROGRESS = DATA_DIR / "progress"
 
 
@@ -488,6 +489,8 @@ def run_profiles(cat: dict, site: dict, progress, log) -> dict:
                 page.goto(url, wait_until="domcontentloaded", timeout=45000)
                 return True
             except Exception as e:
+                if DEAD_BROWSER.search(str(e)):  # not this page's fault: stop here, the progress file has the rest
+                    raise
                 log({"url": url, "error": str(e)[:300]})
                 say(f"باز نشد: {url} — {str(e)[:150]}")
                 return False
