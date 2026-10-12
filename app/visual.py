@@ -30,7 +30,9 @@ PICK_JS = r"""
   // readable text of an element without buttons, icons and "show more/less"-style controls
   const __ui = /^(مشاهده|نمایش|ادامه|مطلب|کامل|بیشتر|کمتر|بستن|show|read|see|view|more|less|[\s.…»«<>›‹\-])+$/i;
   const __txt = e => { if (!e) return null; const c = e.cloneNode(true);
-    c.querySelectorAll('button,[role=button],svg,script,style,noscript,input,select,textarea,.__hl').forEach(x => x.remove());
+    // a button that now shows a phone number (after "show number") is data, not a control
+    c.querySelectorAll('button,[role=button],svg,script,style,noscript,input,select,textarea,.__hl').forEach(x => {
+      if (!/[0-9۰-۹٠-٩]{5}/.test(x.textContent || '') || /^(svg|script|style|noscript)$/i.test(x.tagName)) x.remove(); });
     c.querySelectorAll('a,span,div,p,small,i').forEach(x => { const t = (x.textContent || '').trim();
       if (t && t.length < 30 && __ui.test(t)) x.remove(); });
     c.querySelectorAll('p,div,li,br,h1,h2,h3,h4,h5,h6,tr,section,article').forEach(x => x.append(' '));
@@ -146,7 +148,9 @@ HOVER_JS = r"""
   // readable text of an element without buttons, icons and "show more/less"-style controls
   const __ui = /^(مشاهده|نمایش|ادامه|مطلب|کامل|بیشتر|کمتر|بستن|show|read|see|view|more|less|[\s.…»«<>›‹\-])+$/i;
   const __txt = e => { if (!e) return null; const c = e.cloneNode(true);
-    c.querySelectorAll('button,[role=button],svg,script,style,noscript,input,select,textarea,.__hl').forEach(x => x.remove());
+    // a button that now shows a phone number (after "show number") is data, not a control
+    c.querySelectorAll('button,[role=button],svg,script,style,noscript,input,select,textarea,.__hl').forEach(x => {
+      if (!/[0-9۰-۹٠-٩]{5}/.test(x.textContent || '') || /^(svg|script|style|noscript)$/i.test(x.tagName)) x.remove(); });
     c.querySelectorAll('a,span,div,p,small,i').forEach(x => { const t = (x.textContent || '').trim();
       if (t && t.length < 30 && __ui.test(t)) x.remove(); });
     c.querySelectorAll('p,div,li,br,h1,h2,h3,h4,h5,h6,tr,section,article').forEach(x => x.append(' '));
@@ -220,7 +224,9 @@ LIST_JS = r"""
   // readable text of an element without buttons, icons and "show more/less"-style controls
   const __ui = /^(مشاهده|نمایش|ادامه|مطلب|کامل|بیشتر|کمتر|بستن|show|read|see|view|more|less|[\s.…»«<>›‹\-])+$/i;
   const __txt = e => { if (!e) return null; const c = e.cloneNode(true);
-    c.querySelectorAll('button,[role=button],svg,script,style,noscript,input,select,textarea,.__hl').forEach(x => x.remove());
+    // a button that now shows a phone number (after "show number") is data, not a control
+    c.querySelectorAll('button,[role=button],svg,script,style,noscript,input,select,textarea,.__hl').forEach(x => {
+      if (!/[0-9۰-۹٠-٩]{5}/.test(x.textContent || '') || /^(svg|script|style|noscript)$/i.test(x.tagName)) x.remove(); });
     c.querySelectorAll('a,span,div,p,small,i').forEach(x => { const t = (x.textContent || '').trim();
       if (t && t.length < 30 && __ui.test(t)) x.remove(); });
     c.querySelectorAll('p,div,li,br,h1,h2,h3,h4,h5,h6,tr,section,article').forEach(x => x.append(' '));
@@ -244,7 +250,9 @@ DETAIL_JS = r"""
   // readable text of an element without buttons, icons and "show more/less"-style controls
   const __ui = /^(مشاهده|نمایش|ادامه|مطلب|کامل|بیشتر|کمتر|بستن|show|read|see|view|more|less|[\s.…»«<>›‹\-])+$/i;
   const __txt = e => { if (!e) return null; const c = e.cloneNode(true);
-    c.querySelectorAll('button,[role=button],svg,script,style,noscript,input,select,textarea,.__hl').forEach(x => x.remove());
+    // a button that now shows a phone number (after "show number") is data, not a control
+    c.querySelectorAll('button,[role=button],svg,script,style,noscript,input,select,textarea,.__hl').forEach(x => {
+      if (!/[0-9۰-۹٠-٩]{5}/.test(x.textContent || '') || /^(svg|script|style|noscript)$/i.test(x.tagName)) x.remove(); });
     c.querySelectorAll('a,span,div,p,small,i').forEach(x => { const t = (x.textContent || '').trim();
       if (t && t.length < 30 && __ui.test(t)) x.remove(); });
     c.querySelectorAll('p,div,li,br,h1,h2,h3,h4,h5,h6,tr,section,article').forEach(x => x.append(' '));
@@ -253,7 +261,10 @@ DETAIL_JS = r"""
   for (const f of fields) { let e = null;
     for (const sel of (f.selectors && f.selectors.length ? f.selectors : [f.selector])) { try { e = document.querySelector(sel); } catch (_) {} if (e) break; }
     o[f.name] = !e ? null : f.attr === 'href' ? (e.closest('a')?.href || null) : f.attr === 'src' ? (e.currentSrc || e.src || null)
-              : __txt(e); }
+              : __txt(e);
+    if (e && !o[f.name]) {  // a phone shown only as a tel: link
+      const t = e.closest('a[href^="tel:"]') || e.querySelector('a[href^="tel:"]');
+      if (t) o[f.name] = decodeURIComponent(t.getAttribute('href').slice(4)); } }
   return o; }
 """
 
@@ -333,6 +344,8 @@ def run_profiles(cat: dict, site: dict, progress, log) -> dict:
     delay, max_pages = max(site["delay_seconds"], 0), int(cfg.get("max_pages") or 200)
     stats = {"pages": 0, "rows": 0, "new": 0, "details": 0}
     profiles: list[str] = []
+    with db.conn() as c:  # rows of the older list-card flow cannot be refreshed by this one
+        c.execute("DELETE FROM items WHERE category_id=? AND source='لیست'", (cat["id"],))
 
     with sync_playwright() as pw:
         browser = pw.chromium.launch(args=["--disable-dev-shm-usage"])
@@ -404,6 +417,7 @@ def run_profiles(cat: dict, site: dict, progress, log) -> dict:
                 progress({**stats, "rows": len(profiles)})
 
         # 2) every profile: read the picked fields
+        empty = {f["name"]: 0 for f in fields}
         for href in profiles:
             if not open_(href):
                 continue
@@ -413,26 +427,79 @@ def run_profiles(cat: dict, site: dict, progress, log) -> dict:
                     break
                 except PwTimeout:
                     continue
-            if cfg.get("detail_click"):
-                try:
-                    page.click(cfg["detail_click"], timeout=5000)
-                    page.wait_for_timeout(1500)
-                except Exception:
-                    pass
             try:
                 if page.evaluate(EXPAND_JS):
                     page.wait_for_timeout(700)
             except Exception:
                 pass
-            row = {k: v for k, v in page.evaluate(DETAIL_JS, fields).items() if v not in (None, "")}
-            log({"url": href, "found": len(row)})
+            clicked = _click_show(page, cfg)
+            row = _read_settled(page, fields, 8000 if clicked else 0)
+            log({"url": href, "found": len(row), "clicked": clicked})
             stats["details"] += 1
+            for f in fields:
+                empty[f["name"]] += f["name"] not in row
             if row:
                 stats["rows"] += 1
                 stats["new"] += _save(cat["id"], [{**row, "__url": href}], "__url", href, single=True)
             progress(stats)
         browser.close()
+    stats["empty"] = {k: v for k, v in empty.items() if v}
     return stats
+
+
+CLICK_TEXT_JS = r"""
+(text) => {
+  const norm = t => (t || '').replace(/\s+/g, ' ').trim();
+  for (const e of document.querySelectorAll('button,[role=button],a,span,div')) {
+    if (norm(e.textContent) === text && e.children.length < 4 && e.offsetParent !== null) { e.click(); return true; }
+  }
+  return false; }
+"""
+
+
+def _click_show(page, cfg: dict) -> bool:
+    """The optional "show number"-style button: by its saved selectors, else by its text."""
+    sels = cfg.get("click_selectors") or ([cfg["detail_click"]] if cfg.get("detail_click") else [])
+    for sel in sels:
+        try:
+            loc = page.locator(sel).first
+            if loc.count() and loc.is_visible():
+                loc.click(timeout=5000)
+                return True
+        except Exception:
+            continue
+    if cfg.get("click_text"):
+        try:
+            return bool(page.evaluate(CLICK_TEXT_JS, cfg["click_text"]))
+        except Exception:
+            return False
+    return False
+
+
+def _read_settled(page, fields: list, wait_ms: int) -> dict:
+    """Read the fields; after a click, keep reading until nothing new appears (the number loads late)."""
+    read = lambda: {k: v for k, v in page.evaluate(DETAIL_JS, fields).items() if v not in (None, "")}
+    row = read()
+    if not wait_ms:
+        return row
+    page.wait_for_timeout(1000)
+    waited, last, same = 1000, None, 0
+    while waited < wait_ms:
+        try:
+            row = read()
+        except Exception:  # the click navigated: read the new page
+            page.wait_for_timeout(500)
+            waited += 500
+            continue
+        same = same + 1 if row == last else 0
+        if len(row) == len(fields) and same >= 1:
+            break
+        if same >= 3:
+            break
+        last = row
+        page.wait_for_timeout(500)
+        waited += 500
+    return row
 
 
 def run(cat: dict, site: dict, progress, log) -> dict:

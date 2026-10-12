@@ -249,6 +249,8 @@ class VisualIn(BaseModel):
     profile_url: str = ""
     link_sample: str = ""
     link_count: int = 0
+    click_selectors: list = []
+    click_text: str = ""
     next_selectors: list = []
 
 
@@ -277,7 +279,7 @@ def save_visual(cid: int, body: VisualIn):
                "detail_link": body.detail_link or None, "detail_click": body.detail_click or None,
                "rules": [[str(r[0]), str(r[1])] for r in body.rules if isinstance(r, list) and len(r) >= 2 and str(r[0])],
                "is_list": body.is_list, "flow": body.flow, "profile_url": body.profile_url.strip(),
-               "link_sample": body.link_sample.strip(), "link_count": body.link_count, "next_selectors": [str(x) for x in body.next_selectors if x]}
+               "link_sample": body.link_sample.strip(), "link_count": body.link_count, "click_selectors": [str(x) for x in body.click_selectors if x], "click_text": body.click_text.strip()[:80], "next_selectors": [str(x) for x in body.next_selectors if x]}
         # the picked fields are the output, so no separate field choice
         c.execute("UPDATE categories SET config=?, mode='visual', fields='[]' WHERE id=?", (json.dumps(cfg, ensure_ascii=False), cid))
         return {**_cat_out(_get_cat(c, cid)), "warnings": warnings}
@@ -405,6 +407,21 @@ class RecLinks(BaseModel):
 async def recorder_links(body: RecLinks):
     try:
         return await recorder.links(body.sample)
+    except RecorderError as e:
+        raise HTTPException(409, str(e))
+    except Exception as e:
+        raise HTTPException(400, str(e))
+
+
+class RecRead(BaseModel):
+    fields: list
+
+
+@app.post("/api/recorder/read", dependencies=[Depends(auth)])
+async def recorder_read(body: RecRead):
+    """What each picked field reads on the page open in the browser (the panel's test button)."""
+    try:
+        return await recorder.read(body.fields)
     except RecorderError as e:
         raise HTTPException(409, str(e))
     except Exception as e:

@@ -133,6 +133,10 @@ class Recorder:
         """Profile links on the open page that look like `sample` (see visual.LINKS_JS)."""
         return await self._page().evaluate(visual.LINKS_JS, sample)
 
+    async def read(self, fields: list) -> dict:
+        """The picked fields as a collection run would read them on the open page."""
+        return await self._page().evaluate(visual.DETAIL_JS, fields)
+
     async def hover(self, x: float, y: float, mode: str, where: str, item_selector: str | None, attr: str) -> dict | None:
         """What a click at (x, y) would pick, for the live outline in the panel (see visual.HOVER_JS)."""
         if not self.active:

@@ -274,9 +274,12 @@ function vLoad(){const c=cat.config||{};vErr='';
   const fields=(c.fields||[]).filter(f=>f.name&&f.name!==c.detail_link).map(f=>({...f}));
   vcfg={list_url:c.list_url||'',max_pages:c.max_pages||200,link_sample:c.link_sample||'',link_count:c.link_count||0,
     next_selectors:c.next_selectors||[],profile_url:c.profile_url||'',
-    click:c.detail_click?{selector:c.detail_click}:null,
+    click:c.detail_click?{selector:c.detail_click,selectors:c.click_selectors||[],text:c.click_text||''}:null,
     fields:fields.length?fields:[{name:'نام',attr:'text'},{name:'تخصص',attr:'text'},{name:'تلفن',attr:'text'}],
-    rules:c.rules||[],_cid:cat.id}}
+    rules:c.rules||[],_cid:cat.id};
+  // picks made on another kind of page (e.g. on the list in the older flow) do not work on profiles: pick again
+  const seg=u=>{try{return decodeURIComponent(new URL(u,'https://x').pathname).split('/').filter(Boolean)[0]||''}catch{return ''}};
+  if(vcfg.link_sample)vcfg.fields.forEach(f=>{if(f.at&&seg(f.at)!==seg(vcfg.link_sample))['selector','selectors','raw','sample','at','rel','rel_tags','rels','count'].forEach(k=>delete f[k])})}
 const vPicked=f=>!!(f.selector||(f.selectors||[]).length);
 function vReady(){return vcfg&&vUrls().length&&vcfg.link_sample&&vcfg.fields.some(f=>f.name.trim()&&vPicked(f))}
 const FA_D='۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩';
@@ -345,7 +348,7 @@ function vRender(){if(!$('#vis'))return;
 function vReset(i){const f=vcfg.fields[i];['rel','rel_tags','rels','selector','selectors','raw','sample','at','count'].forEach(k=>delete f[k]);vRender();vSave(true)}
 function vPayload(){const fields=vcfg.fields.filter(f=>f.name.trim()).map(f=>({...f,name:f.name.trim(),page:'detail'}));
   return {flow:'profiles',list_url:vcfg.list_url,max_pages:vcfg.max_pages,item_selector:'',fields,detail_link:null,
-    detail_click:vcfg.click?.selector||null,rules:vcfg.rules||[],is_list:true,
+    detail_click:vcfg.click?.selector||null,click_selectors:vcfg.click?.selectors||[],click_text:vcfg.click?.text||'',rules:vcfg.rules||[],is_list:true,
     profile_url:vcfg.profile_url||'',link_sample:vcfg.link_sample||'',link_count:vcfg.link_count||0,next_selectors:vcfg.next_selectors||[]}}
 let vErr='';
 function vShowErr(){const e=$('#v-err');if(e){e.innerHTML=vErr;e.classList.toggle('hidden',!vErr)}}
@@ -378,7 +381,16 @@ function vBar(){const bar=$('#rec-pick');if(!vcfg||cat?.mode!=='visual'){bar.inn
   bar.innerHTML=(vArm?'<span><b>حالا روی همان چیز در صفحه کلیک کنید</b> (برای لغو دوباره روی دکمه بزنید)</span>':'')
     +`<span style="border:1px solid var(--line);border-radius:8px;padding:2px 6px"><b>۱ صفحه لیست:</b> ${nav('list','↪ برو')}${chip('link','لینک پروفایل',vcfg.link_sample)}${chip('next','دکمه صفحه بعد (اختیاری)',vcfg.next_selectors.length)}</span>`
     +`<span style="border:1px solid var(--line);border-radius:8px;padding:2px 6px"><b>۲ صفحه پروفایل:</b> ${nav('profile','↪ برو')}`
-    +vcfg.fields.map((f,i)=>f.name.trim()?chip('f'+i,f.name,vPicked(f)):'').join('')+chip('click','دکمه نمایش (اختیاری)',vcfg.click)+'</span>'+size+modeSw}
+    +vcfg.fields.map((f,i)=>f.name.trim()?chip('f'+i,f.name,vPicked(f)):'').join('')+chip('click','دکمه نمایش (اختیاری)',vcfg.click)+'<button onclick="vTest()" title="همین صفحه را مثل جمع‌آوری بخوان">🧪 آزمایش این صفحه</button></span>'+size+modeSw
+    +(vTestOut?`<div style="flex-basis:100%;border:1px solid var(--line);border-radius:8px;padding:6px 10px;font-size:13px">${vTestOut}</div>`:'')}
+let vTestOut='';
+async function vTest(){const fields=vPayload().fields.filter(vPicked);
+  if(!fields.length){toast('هنوز هیچ اطلاعاتی روی صفحه پروفایل انتخاب نشده');return}
+  try{const r=await jpost('/api/recorder/read',{fields});
+    vTestOut='<b>نتیجه روی همین صفحه:</b> '+fields.map(f=>{const v=vClean(r[f.name]??'',f);
+      return `${esc(f.name)}: ${v?`<span class="ok">${esc(String(v).slice(0,60))}</span>`:'<span class="failed">خالی ✗ (دوباره انتخاب کنید)</span>'}`}).join(' · ')}
+  catch(err){vTestOut=esc(err.message)}
+  vBar()}
 function vArmSet(k){vArm=vArm===k?null:k;vHlHide();vBar()}
 // ----- live outline: what a click would take -----
 let vMode='exact',vHovTimer=null,vHovBusy=false;
@@ -402,9 +414,9 @@ async function vPick(x,y,up=0){const k=vArm;vArm=null;
       vcfg.link_sample=href;vcfg.link_count=l.links.length;
       toast(`${fa(l.links.length)} پروفایل در این صفحه پیدا شد`)}
     else if(k==='next'){vcfg.next_selectors=r.selectors||[r.selector];toast('دکمه صفحه بعد انتخاب شد')}
-    else if(k==='click'){vcfg.click={selector:r.selector};toast('دکمه انتخاب شد؛ حالا خودتان یک بار رویش کلیک کنید تا اطلاعات نمایش داده شود')}
+    else if(k==='click'){vcfg.click={selector:r.selector,selectors:r.selectors||[],text:(r.samples[0]||'').slice(0,80)};toast('دکمه انتخاب شد؛ حالا خودتان یک بار رویش کلیک کنید تا اطلاعات نمایش داده شود')}
     else{const f=vcfg.fields[+k.slice(1)];vLast={k,x,y,up};
-      Object.assign(f,{page:'detail',selector:r.selector,selectors:r.selectors,raw:r.samples[0]||''});
+      Object.assign(f,{page:'detail',selector:r.selector,selectors:r.selectors,raw:r.samples[0]||'',at:(()=>{try{return new URL($('#rec-url').value).pathname}catch{return ''}})()});
       ['rel','rel_tags','rels','count'].forEach(x=>delete f[x]);
       toast(`انتخاب شد: ${(r.samples[0]||'—').slice(0,50)}`)}
     vBar();vRender();vSave(true)}
@@ -504,7 +516,7 @@ async function recStart(){const url=prompt('آدرس صفحه شروع (معمو
   try{const r=await jpost(`/api/categories/${cat.id}/recorder/start`,{url});if(r.warning)toast('صفحه کامل باز نشد؛ ادامه دهید');recOpen(r.url)}catch(err){toast(err.message)}}
 const REC_HELP_VISUAL='روی تصویر کلیک کنید و تایپ کنید، درست مثل یک مرورگر. اگر لازم است اول لاگین کنید. <b>صفحه لیست:</b> «لینک پروفایل» را بزنید و روی اسم یکی از پزشکان کلیک کنید؛ اگر سایت دکمه «صفحه بعد» دارد آن را هم انتخاب کنید. <b>صفحه پروفایل:</b> «↪ برو» را بزنید، بعد روی اسم هر اطلاعات (نام، تلفن…) و سپس روی همان چیز در صفحه کلیک کنید. آخر «پایان و ذخیره» (ورود شما هم ذخیره می‌شود).';
 let recHelpApi=null;
-function recOpen(url){vArm=null;vLast=null;vBar();recHelpApi??=$('#rec-help').innerHTML;$('#rec-help').innerHTML=cat?.mode==='visual'?REC_HELP_VISUAL:recHelpApi;$('#rec').classList.remove('hidden');$('#rec-url').value=url||'';$('#rec-img').focus();clearInterval(recTimer);recShot();recTimer=setInterval(recShot,700)}
+function recOpen(url){vArm=null;vLast=null;vTestOut='';vBar();recHelpApi??=$('#rec-help').innerHTML;$('#rec-help').innerHTML=cat?.mode==='visual'?REC_HELP_VISUAL:recHelpApi;$('#rec').classList.remove('hidden');$('#rec-url').value=url||'';$('#rec-img').focus();clearInterval(recTimer);recShot();recTimer=setInterval(recShot,700)}
 async function recShot(){if(recBusy)return;recBusy=true;
   // never wait on one picture for long: a stuck request would freeze the screen
   const ac=new AbortController(),tm=setTimeout(()=>ac.abort(),8000);

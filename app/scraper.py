@@ -328,6 +328,10 @@ def _run_visual(cat: dict, site: dict, run_id: int, trigger: str) -> dict:
         status = "ok" if not errors else ("partial" if stats["rows"] else "failed")
         message = (f"{stats['rows']} مورد از {stats['pages']} صفحه ({stats['new']} جدید"
                    + (f"، جزئیات {stats['details']}" if stats["details"] else "") + f") · مجموع این بخش: {total}")
+        if stats.get("empty"):  # fields the profiles did not show: wrong pick, or the number needs login/click
+            message += " · خالی ماند: " + "، ".join(f"{k} در {v} پروفایل" for k, v in stats["empty"].items())
+            if status == "ok":
+                status = "partial"
         if not stats["rows"]:
             status, message = "failed", "در صفحه لیست موردی پیدا نشد؛ آدرس لیست را بررسی کنید یا اطلاعات را دوباره روی صفحه انتخاب کنید"
     except ImportError:
