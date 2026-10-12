@@ -380,6 +380,9 @@ function onListPage(){const u=$('#rec-url').value;
 let vLast=null;  // last pick: {k,x,y,up} for the bigger/smaller buttons
 async function vResize(d){if(!vLast)return;const up=Math.max(0,vLast.up+d);if(up===vLast.up&&d<0)return toast('کوچک‌تر از این نمی‌شود');
   vArm=vLast.k;await vPick(vLast.x,vLast.y,up)}
+function onAddressPage(){const u=$('#rec-url').value;
+  return vUrls().some(l=>{try{const a=new URL(u),b=new URL(l.replace('{page}','1'));
+    return a.host.replace(/^www\./,'')===b.host.replace(/^www\./,'')&&decodeURIComponent(a.pathname).replace(/\/$/,'')===decodeURIComponent(b.pathname).replace(/\/$/,'')}catch{return false}})}
 async function vPick(x,y,up=0){const k=vArm;vArm=null;
   const f=k==='link'?{page:'list',attr:'href'}:k==='click'?{page:'detail',attr:'click'}:vcfg.fields[+k.slice(1)];
   const onList=onListPage();
@@ -389,6 +392,13 @@ async function vPick(x,y,up=0){const k=vArm;vArm=null;
     if(f.page!==where){f.page=where;delete f.rel;delete f.rel_tags;delete f.selector;f.count=''}}
   try{const r=await jpost('/api/recorder/pick',{x,y,up,where:f.page,item_selector:f.page==='list'?vcfg.item_selector:null,attr:f.attr||'text'});
     if(r.error){toast(r.error);vBar();return}
+    // clicked inside a repeated card on the section's own address: it is a results list, switch automatically
+    if(f.page==='detail'&&k!=='click'&&k!=='link'&&r.list_hint&&!vcfg.is_list&&onAddressPage()){
+      vcfg.is_list=true;f.page='list';
+      // fields picked earlier on this same page were read as single items: they need picking again on the list
+      vcfg.fields.forEach(x=>{if(x!==f&&x.page==='detail'&&x.at&&x.at===new URL($('#rec-url').value).pathname){x.page='list';delete x.selector;x.count=''}});
+      toast(`لیست تشخیص داده شد (${fa(r.list_hint)} مورد در این صفحه): از این به بعد اطلاعات این صفحه از همه موارد خوانده می‌شود`);
+      vArm=k;vRender();return vPick(x,y,up)}
     vLast={k,x,y,up};
     if(f.page==='list'){
       if(vcfg.item_selector&&r.item_selector!==vcfg.item_selector){  // a different list: earlier list picks are void
@@ -399,7 +409,7 @@ async function vPick(x,y,up=0){const k=vArm;vArm=null;
       if(k==='link')vcfg.link={name:'لینک صفحه',page:'list',attr:'href',...v};else Object.assign(f,v);
       toast(`${fa(r.count)} مورد در این صفحه پیدا شد · نمونه: ${(r.samples[0]||'—').slice(0,40)}`)}
     else if(k==='click'){vcfg.click={selector:r.selector,sample:r.samples[0]};toast('دکمه انتخاب شد؛ حالا خودتان یک بار رویش کلیک کنید تا اطلاعات نمایش داده شود')}
-    else{Object.assign(f,{selector:r.selector,count:'',raw:r.samples[0]||''});toast(`انتخاب شد: ${(r.samples[0]||'—').slice(0,50)}`)}
+    else{Object.assign(f,{selector:r.selector,count:'',raw:r.samples[0]||'',at:(()=>{try{return new URL($('#rec-url').value).pathname}catch{return ''}})()});toast(`انتخاب شد: ${(r.samples[0]||'—').slice(0,50)}`)}
     vBar();vRender();vSave(true)}
   catch(err){toast(err.message);vBar()}
   setTimeout(recShot,200)}

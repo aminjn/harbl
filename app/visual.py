@@ -86,7 +86,21 @@ PICK_JS = r"""
   }
   const selector = parts.join(' > ');
   mark([el]);
-  return {selector, count: document.querySelectorAll(selector).length, samples: [value(el)]};
+  // is this element inside a repeated, visibly framed card (a results list)? then the panel switches to list mode
+  let listHint = 0;
+  for (let a = el; a && a.parentElement && a !== document.body; a = a.parentElement) {
+    // same-looking siblings that are also built the same way inside (doctor cards yes; a profile's different boxes no)
+    const head = e => e.firstElementChild ? e.firstElementChild.tagName + '.' + e.firstElementChild.className : '';
+    const alike = c => head(c) === head(a) && Math.abs(c.children.length - a.children.length) <= 1;
+    const s = seg(a), sibs = [...a.parentElement.children].filter(c => c.matches(s) && alike(c));
+    if (sibs.length >= 3) {
+      const cs = getComputedStyle(a), r = a.getBoundingClientRect();
+      const framed = cs.boxShadow !== 'none' || (parseFloat(cs.borderTopWidth) > 0 && cs.borderTopStyle !== 'none')
+                  || (cs.backgroundColor !== getComputedStyle(a.parentElement).backgroundColor && !/rgba\(.*,\s*0\)$/.test(cs.backgroundColor));
+      if (framed && r.height > 60 && r.width > 200 && a.querySelector('a[href]')) { listHint = sibs.length; break; }
+    }
+  }
+  return {selector, count: document.querySelectorAll(selector).length, samples: [value(el)], list_hint: listHint};
 }
 """
 
