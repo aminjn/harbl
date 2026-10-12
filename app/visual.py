@@ -366,6 +366,33 @@ def _key(row: dict, link_field: str | None) -> str:
     return "h:" + hashlib.sha1(json.dumps(row, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
 
 
+def _norm_profile(href: str, sample: str) -> str:
+    """One address per profile: no #fragment, no trailing slash, no ?query unless the sample link needs one."""
+    u = urlsplit(href)
+    query = u.query if urlsplit(sample).query else ""
+    return urlunsplit((u.scheme, u.netloc.lower(), u.path.rstrip("/") or "/", query, ""))
+
+
+def _dedupe_profiles(category_id: int, sample: str):
+    """Rows of the older flows (list cards, single pages) and the same profile saved under two addresses."""
+    with db.conn() as c:
+        c.execute("DELETE FROM items WHERE category_id=? AND (source='لیست' OR item_key NOT LIKE 'url:%')", (category_id,))
+        rows = c.execute("SELECT id, item_key, data, last_seen FROM items WHERE category_id=? ORDER BY last_seen DESC, id DESC",
+                         (category_id,)).fetchall()
+        kept: dict[str, dict] = {}
+        for r in rows:  # newest first: an older copy of a profile goes
+            key = "url:" + _norm_profile(r["item_key"][4:], sample)
+            if key in kept:
+                c.execute("DELETE FROM items WHERE id=?", (r["id"],))
+            else:
+                kept[key] = r
+        for key, r in kept.items():  # renamed only after the copies are gone (keys are unique)
+            if key != r["item_key"]:
+                data = json.loads(r["data"])
+                data["__url"] = key[4:]
+                c.execute("UPDATE items SET item_key=?, data=? WHERE id=?", (key, json.dumps(data, ensure_ascii=False), r["id"]))
+
+
 def run_profiles(cat: dict, site: dict, progress, log) -> dict:
     """List pages only give profile links (by the shape of one picked link); every field is read on the profiles."""
     from playwright.sync_api import TimeoutError as PwTimeout, sync_playwright
@@ -381,8 +408,7 @@ def run_profiles(cat: dict, site: dict, progress, log) -> dict:
     delay, max_pages = max(site["delay_seconds"], 0), int(cfg.get("max_pages") or 200)
     stats = {"pages": 0, "rows": 0, "new": 0, "details": 0}
     profiles: list[str] = []
-    with db.conn() as c:  # rows of the older list-card flow cannot be refreshed by this one
-        c.execute("DELETE FROM items WHERE category_id=? AND source='لیست'", (cat["id"],))
+    _dedupe_profiles(cat["id"], sample)
 
     with sync_playwright() as pw:
         browser = pw.chromium.launch(args=["--disable-dev-shm-usage"])
@@ -445,6 +471,7 @@ def run_profiles(cat: dict, site: dict, progress, log) -> dict:
                     if not moved:
                         break
                 links = page_links()
+                links = list(dict.fromkeys(_norm_profile(h, sample) for h in links))
                 new = [h for h in links if h not in profiles and host_allowed(h, site["allowed_domains"])]
                 log({"url": page.url, "links": len(links), "new": len(new)})
                 if not new:  # past the last page
