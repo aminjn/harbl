@@ -489,12 +489,13 @@ function setSrc(v){src=v;page=0;loadItems()}
 
 async function stopRun(){try{const r=await api(`/api/sites/${cur.id}/stop`,{method:'POST'});
   toast(r.stopping?'در حال توقف… بعد از همین صفحه می‌ایستد؛ آنچه جمع شده می‌ماند':'اجرایی در جریان نیست')}catch(err){toast(err.message)}}
-function watchRun(){$('#btn-run')?.setAttribute('disabled','');$('#btn-run-all')?.setAttribute('disabled','');$('#btn-stop')?.classList.remove('hidden');const id=cur.id;clearInterval(poll);
-  poll=setInterval(async()=>{if(cur?.id!==id)return clearInterval(poll);
+let watching=false;
+function watchRun(){watching=true;$('#btn-run')?.setAttribute('disabled','');$('#btn-run-all')?.setAttribute('disabled','');$('#btn-stop')?.classList.remove('hidden');const id=cur.id;clearInterval(poll);
+  poll=setInterval(async()=>{if(cur?.id!==id){watching=false;return clearInterval(poll)}
     const [cs]=await Promise.all([api(`/api/sites/${id}/categories`),loadSites()]);
     const c=cs.find(x=>x.id===cat?.id);
     if(c){$('#cnt').textContent=fa(c.item_count);$('#lastrun').innerHTML=lastRunText(c.last_run)}
-    if(!cur.running){clearInterval(poll);$('#btn-run-all')?.removeAttribute('disabled');$('#btn-stop')?.classList.add('hidden');await loadCats();
+    if(!cur.running){clearInterval(poll);watching=false;$('#btn-run-all')?.removeAttribute('disabled');$('#btn-stop')?.classList.add('hidden');await loadCats();
       toast('تمام شد'+(cat?.last_run?': '+stName[cat.last_run.status]:''))}},4000)}
 async function runCat(){try{await api(`/api/categories/${cat.id}/run`,{method:'POST'});toast('اجرا شروع شد');watchRun()}catch(err){toast(err.message)}}
 async function runAll(){try{await api(`/api/sites/${cur.id}/run`,{method:'POST'});toast('اجرای همه بخش‌ها شروع شد');watchRun()}catch(err){toast(err.message)}}
@@ -567,8 +568,9 @@ async function recStop(save){if(!save&&!confirm('ضبط لغو شود؟ چیزی
 // a recording left open (page reload): offer to continue it
 api('/api/recorder').then(r=>{if(r.active&&confirm('یک ضبط باز است. ادامه می‌دهید؟'))recOpen(r.url)}).catch(()=>{});
 
-const refresh=()=>loadSites().catch(e=>{$('#sites').innerHTML=`<p class="note warn">خطا در دریافت لیست سایت‌ها: ${esc(e.message)}</p>`});
-refresh();setInterval(refresh,15000);
+// a run the server started by itself (continued after a restart, or scheduled) is followed like one started here
+const refresh=()=>loadSites().then(()=>{if(cur?.running&&!watching)watchRun()}).catch(e=>{$('#sites').innerHTML=`<p class="note warn">خطا در دریافت لیست سایت‌ها: ${esc(e.message)}</p>`});
+refresh();setInterval(refresh,10000);
 </script>
 </body>
 </html>
