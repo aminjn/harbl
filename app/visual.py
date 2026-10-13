@@ -453,6 +453,11 @@ def run_profiles(cat: dict, site: dict, progress, log) -> dict:
         raise ValueError("در قسمت ۱ آدرس صفحه لیست را بدهید و «لینک پروفایل» را روی یکی از پزشکان انتخاب کنید")
     if not fields:
         raise ValueError("در قسمت ۲ هیچ اطلاعاتی روی صفحه پروفایل انتخاب نشده است")
+    outside = [u for u in urls if not host_allowed(u.replace("{page}", "1"), site["allowed_domains"])]
+    if len(outside) == len(urls):  # say why, instead of "nothing found on the list"
+        host = urlsplit(urls[0]).hostname or urls[0]
+        raise ValueError(f"آدرس لیست روی {host} است ولی این سایت فقط برای {'، '.join(site['allowed_domains'])} قرارداد دارد؛ "
+                         f"این بخش را در سایت مربوط به {host} بسازید، یا اگر قرارداد شامل آن هم هست، {host} را در «تنظیمات سایت» به دامنه‌ها اضافه کنید")
     delay, max_pages = max(site["delay_seconds"], 0), int(cfg.get("max_pages") or 200)
     stats = {"pages": 0, "rows": 0, "new": 0, "details": 0}
     # how far an earlier run of the same addresses got (it was cut off by a restart): continue from there

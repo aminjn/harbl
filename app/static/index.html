@@ -322,14 +322,19 @@ function vPrev(i){const f=vcfg.fields[i],e=$('#v-prev-'+i);if(e)e.textContent=vC
 function vStatus(f){const shown=vClean(f.raw??f.sample??'',f);
   return vPicked(f)?`<span class="ok">✓</span> <small title="${esc(shown)}">${esc((shown||'').slice(0,50))}</small>`:'<small class="failed">هنوز انتخاب نشده</small>'}
 const vUrls=()=>vcfg.list_url.split('\n').map(u=>u.trim()).filter(Boolean);
+// list addresses outside the site's contract domains (they are never opened)
+const vOutside=()=>vUrls().map(u=>{try{return new URL(u.includes('://')?u:'https://'+u).hostname.toLowerCase()}catch{return ''}})
+  .filter(h=>h&&!(cur?.allowed_domains||[]).some(d=>{d=d.toLowerCase().replace(/^\./,'');return h===d||h.endsWith('.'+d)}))
+  .filter((h,i,a)=>a.indexOf(h)===i);
 const okMark=(done,txt)=>done?`<span class="ok">✓</span> <small>${txt}</small>`:`<small class="failed">${txt}</small>`;
 function vRender(){if(!$('#vis'))return;
   const others=cats.filter(c=>c.id!==cat.id&&configured(c));
   $('#vis').innerHTML=`
   ${others.length?`<div class="row" style="margin-bottom:8px;gap:6px"><span>⧉ کپی همه تنظیمات از بخش</span><select id="v-copy" style="width:auto">${others.map(c=>`<option value="${c.id}">${esc(c.name)}</option>`).join('')}</select><button onclick="copyFrom()">کپی</button><small class="note">فیلدها، دکمه‌ها، لینک پروفایل و ورود؛ فقط آدرس لیست را خودتان می‌نویسید</small></div>`:''}
   <div class="step"><b class="n">۱</b><b>صفحه لیست</b> <small>(جایی که پزشکان زیر هم آمده‌اند؛ فقط برای پیدا کردن پروفایل‌ها)</small>
-    <div class="row" style="margin-top:6px;align-items:flex-start"><textarea id="v-url" dir="ltr" rows="4" style="flex:1;min-width:260px" placeholder="مثلاً:&#10;https://drdr.ir/specialties/psychology/&#10;https://drdr.ir/specialties/obstetrics-and-gynecology/" oninput="vcfg.list_url=this.value" onchange="vSave(true)">${esc(vcfg.list_url)}</textarea>
+    <div class="row" style="margin-top:6px;align-items:flex-start"><textarea id="v-url" dir="ltr" rows="4" style="flex:1;min-width:260px" placeholder="مثلاً:&#10;https://drdr.ir/specialties/psychology/&#10;https://drdr.ir/specialties/obstetrics-and-gynecology/" oninput="vcfg.list_url=this.value" onchange="vSave(true);vRender()">${esc(vcfg.list_url)}</textarea>
       <span><label style="margin:0">حداکثر صفحه</label><input type="number" min="1" max="2000" style="width:90px" value="${vcfg.max_pages}" oninput="vcfg.max_pages=+this.value||200" onchange="vSave(true)"></span></div>
+    ${vOutside().length?`<p class="note warn" style="margin:6px 0;border-color:var(--bad)">⚠ این آدرس‌ها روی دامنه‌های این سایت (<span dir="ltr">${esc(cur.allowed_domains.join(', '))}</span>) نیستند و <b>باز نمی‌شوند</b>: <span dir="ltr">${vOutside().map(esc).join(' ، ')}</span><br>این بخش را در سایت مربوط به همان دامنه بسازید، یا اگر قرارداد شامل آن هم هست، دامنه را در «تنظیمات سایت» اضافه کنید.</p>`:''}
     <small class="note" style="display:block;margin:4px 0 8px"><b>برای تخصص‌ها و شهرهای دیگر لازم نیست چیزی را دوباره انتخاب کنید:</b> آدرس صفحه لیستشان را در خط بعدی همین کادر بنویسید (هر خط یک آدرس). همه با همین تنظیمات صفحه پروفایل گرفته می‌شوند و در نتایج، هر آدرس دکمه جدای خودش را دارد. آدرس هیچ‌وقت خودکار عوض نمی‌شود.</small>
     <div class="frow" style="grid-template-columns:minmax(0,1fr) minmax(0,1.6fr) 30px"><b>🔗 لینک پروفایل</b>
       <span>${vcfg.link_sample?okMark(true,`${vcfg.link_count?fa(vcfg.link_count)+' پروفایل در صفحه اول · ':''}شکل لینک‌ها: <span dir="ltr">/${esc(dec(vcfg.link_sample).replace(/^https?:\/\/[^/]+\//,'').split('/')[0])}/…</span>`):okMark(false,'روی اسم یا «مشاهده پروفایل» یکی از پزشکان در صفحه لیست کلیک کنید')}</span>
