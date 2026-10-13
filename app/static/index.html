@@ -225,10 +225,14 @@ async function loadCats(selectId){cats=await api(`/api/sites/${cur.id}/categorie
   renderCat()}
 function selectCat(id){q='';page=0;src='';loadCats(id)}
 async function addCat(){const name=prompt('نام بخش جدید؟ (مثلاً پزشکان، مراکز درمانی، داروخانه‌ها)');if(!name?.trim())return;
-  // same kind of profiles (another specialty / city): keep every pick, only the list address changes
-  const from=cat?.mode==='visual'&&(cat.config?.fields||[]).some(f=>f.selector||(f.selectors||[]).length)?cat:null;
-  const copy=from&&confirm(`تنظیمات صفحه پروفایل و ورود از بخش «${from.name}» کپی شود؟\n(فقط آدرس صفحه لیست را می‌نویسید. برای مراکز یا داروخانه‌ها که صفحه‌شان فرق دارد «Cancel» بزنید)`);
-  const c=await jpost(`/api/sites/${cur.id}/categories`,{name:name.trim(),copy_from:copy?from.id:null});q='';page=0;src='';vcfg=null;await loadCats(c.id)}
+  // same kind of profiles (another specialty / city): every setting comes along, only the list address is new
+  const from=(configured(cat)?cat:null)||[...cats].reverse().find(configured);
+  const c=await jpost(`/api/sites/${cur.id}/categories`,{name:name.trim(),copy_from:from?.id||null});q='';page=0;src='';vcfg=null;await loadCats(c.id);
+  if(from)toast(`همه تنظیمات از «${from.name}» آمد؛ فقط آدرس صفحه لیست را بنویسید و «🧪 آزمایش» کنید`)}
+const configured=c=>c?.mode==='visual'&&(c.config?.fields||[]).some(f=>f.selector||(f.selectors||[]).length);
+async function copyFrom(){const id=+$('#v-copy').value;if(!id)return;const s=cats.find(x=>x.id===id);
+  if(configured(cat)&&!confirm(`تنظیمات فعلی «${cat.name}» با تنظیمات «${s.name}» عوض شود؟ (آدرس‌های لیست همین بخش می‌ماند)`))return;
+  try{await jpost(`/api/categories/${cat.id}/copy`,{source_id:id});vcfg=null;await loadCats(cat.id);toast(`تنظیمات «${s.name}» کپی شد`)}catch(err){toast(err.message)}}
 
 // ----- one section -----
 function lastRunText(lr){return lr?`آخرین اجرا ${fmt(lr.started_at)}: <span class="${lr.status}">${stName[lr.status]}</span>${lr.message?' — '+esc(lr.message):''}`:''}
@@ -239,7 +243,7 @@ function renderCat(){
   const ready=vis?vReady():cat.request_count;
   $('#cat').innerHTML=`<div class="cat">
     <div class="row" style="justify-content:space-between">
-      <h3 style="margin:0">${esc(cat.name)}</h3>
+      <h3 style="margin:0">${esc(cat.name)} <button class="bad" style="font-size:12px;padding:2px 8px;margin-inline-start:6px" onclick="delCat()" title="حذف این بخش و داده‌هایش">🗑 حذف بخش</button></h3>
       <div class="row">
         <button class="pri big" id="btn-run" onclick="runCat()" ${ready?'':'disabled'}>▶ گرفتن داده این بخش</button>
         <button class="bad ${cur?.running?'':'hidden'}" id="btn-stop" onclick="stopRun()">■ توقف</button>
@@ -320,9 +324,11 @@ function vStatus(f){const shown=vClean(f.raw??f.sample??'',f);
 const vUrls=()=>vcfg.list_url.split('\n').map(u=>u.trim()).filter(Boolean);
 const okMark=(done,txt)=>done?`<span class="ok">✓</span> <small>${txt}</small>`:`<small class="failed">${txt}</small>`;
 function vRender(){if(!$('#vis'))return;
+  const others=cats.filter(c=>c.id!==cat.id&&configured(c));
   $('#vis').innerHTML=`
+  ${others.length?`<div class="row" style="margin-bottom:8px;gap:6px"><span>⧉ کپی همه تنظیمات از بخش</span><select id="v-copy" style="width:auto">${others.map(c=>`<option value="${c.id}">${esc(c.name)}</option>`).join('')}</select><button onclick="copyFrom()">کپی</button><small class="note">فیلدها، دکمه‌ها، لینک پروفایل و ورود؛ فقط آدرس لیست را خودتان می‌نویسید</small></div>`:''}
   <div class="step"><b class="n">۱</b><b>صفحه لیست</b> <small>(جایی که پزشکان زیر هم آمده‌اند؛ فقط برای پیدا کردن پروفایل‌ها)</small>
-    <div class="row" style="margin-top:6px;align-items:flex-start"><textarea id="v-url" dir="ltr" rows="4" style="flex:1;min-width:260px" placeholder="https://doctoreto.com/doctors/speciality/ob-gyn/city/sari&#10;https://doctoreto.com/doctors/speciality/cardiology/city/sari" oninput="vcfg.list_url=this.value" onchange="vSave(true)">${esc(vcfg.list_url)}</textarea>
+    <div class="row" style="margin-top:6px;align-items:flex-start"><textarea id="v-url" dir="ltr" rows="4" style="flex:1;min-width:260px" placeholder="مثلاً:&#10;https://drdr.ir/specialties/psychology/&#10;https://drdr.ir/specialties/obstetrics-and-gynecology/" oninput="vcfg.list_url=this.value" onchange="vSave(true)">${esc(vcfg.list_url)}</textarea>
       <span><label style="margin:0">حداکثر صفحه</label><input type="number" min="1" max="2000" style="width:90px" value="${vcfg.max_pages}" oninput="vcfg.max_pages=+this.value||200" onchange="vSave(true)"></span></div>
     <small class="note" style="display:block;margin:4px 0 8px"><b>برای تخصص‌ها و شهرهای دیگر لازم نیست چیزی را دوباره انتخاب کنید:</b> آدرس صفحه لیستشان را در خط بعدی همین کادر بنویسید (هر خط یک آدرس). همه با همین تنظیمات صفحه پروفایل گرفته می‌شوند و در نتایج، هر آدرس دکمه جدای خودش را دارد. آدرس هیچ‌وقت خودکار عوض نمی‌شود.</small>
     <div class="frow" style="grid-template-columns:minmax(0,1fr) minmax(0,1.6fr) 30px"><b>🔗 لینک پروفایل</b>
@@ -335,7 +341,7 @@ function vRender(){if(!$('#vis'))return;
   </div>
   <div class="step"><b class="n">۲</b><b>صفحه پروفایل</b> <small>(همه اطلاعات از اینجا خوانده می‌شود؛ برای هر پزشک)</small>
     <label style="margin-top:6px">آدرس یک پروفایل نمونه <small>(خالی = همان پروفایلی که در قسمت ۱ انتخاب کردید)</small></label>
-    <input id="v-prof" dir="ltr" value="${esc(vcfg.profile_url)}" placeholder="${esc(vcfg.link_sample||'https://www.doctoreto.com/doctor/...')}" oninput="vcfg.profile_url=this.value.trim()" onchange="vSave(true)">
+    <input id="v-prof" dir="ltr" value="${esc(vcfg.profile_url)}" placeholder="${esc(vcfg.link_sample||'مثلاً آدرس صفحه یکی از پزشکان')}" oninput="vcfg.profile_url=this.value.trim()" onchange="vSave(true)">
     <div style="margin-top:8px">${vcfg.fields.map((f,i)=>`<div class="frow" style="grid-template-columns:minmax(0,1fr) 90px minmax(0,1.4fr) 30px 30px 30px">
       <input type="text" value="${esc(f.name)}" placeholder="مثلاً نام، تخصص، تلفن، آدرس" oninput="vcfg.fields[${i}].name=this.value" onchange="vSave(true)">
       <select onchange="vcfg.fields[${i}].attr=this.value;vSave(true)">${Object.entries(ATTR).map(([k,v])=>`<option value="${k}" ${(f.attr||'text')===k?'selected':''}>${v}</option>`).join('')}</select>

@@ -345,14 +345,33 @@ def create_category(site_id: int, body: CategoryIn):
         cid = c.execute("INSERT INTO categories(site_id, name, max_pages, mode, created_at) VALUES (?,?,?,?,?)",
                         (site_id, body.name.strip(), body.max_pages, body.mode or "visual", db.now())).lastrowid
         if body.copy_from:
-            src = _get_cat(c, body.copy_from)
-            if src["site_id"] == site_id and src.get("config"):
-                cfg = json.loads(src["config"])
-                cfg["list_url"] = ""  # only the list address differs (another specialty / city)
-                c.execute("UPDATE categories SET config=?, mode='visual' WHERE id=?", (json.dumps(cfg, ensure_ascii=False), cid))
-                sess = visual.session_file(body.copy_from)
-                if sess.exists():
-                    visual.session_file(cid).write_bytes(sess.read_bytes())
+            _copy_settings(c, body.copy_from, cid)
+        return _cat_out(_get_cat(c, cid))
+
+
+def _copy_settings(c, src_id: int, dst_id: int):
+    """Every setting of a section (picked fields, buttons, profile link, rules) and its login, into another
+    section of the same site. Only the list addresses stay the target's own (another specialty / city)."""
+    src, dst = _get_cat(c, src_id), _get_cat(c, dst_id)
+    if src["site_id"] != dst["site_id"] or not src.get("config"):
+        raise HTTPException(400, "از این بخش نمی‌شود کپی کرد")
+    cfg = json.loads(src["config"])
+    cfg["list_url"] = json.loads(dst.get("config") or "{}").get("list_url", "")
+    c.execute("UPDATE categories SET config=?, mode='visual', fields='[]' WHERE id=?", (json.dumps(cfg, ensure_ascii=False), dst_id))
+    sess = visual.session_file(src_id)
+    if sess.exists():
+        visual.SESSIONS.mkdir(parents=True, exist_ok=True)
+        visual.session_file(dst_id).write_bytes(sess.read_bytes())
+
+
+class CopyIn(BaseModel):
+    source_id: int
+
+
+@app.post("/api/categories/{cid}/copy", dependencies=[Depends(auth)])
+def copy_category_settings(cid: int, body: CopyIn):
+    with db.conn() as c:
+        _copy_settings(c, body.source_id, cid)
         return _cat_out(_get_cat(c, cid))
 
 
