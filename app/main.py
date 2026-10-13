@@ -27,6 +27,7 @@ from .config import ADMIN_PASS, ADMIN_USER, DATA_DIR, FEED_KEY, OUTPUT_DIR
 STATIC = Path(__file__).parent / "static"
 scheduler = BackgroundScheduler(timezone="UTC")
 _running: set[int] = set()
+_queue: dict[int, list] = {}  # site id -> sections waiting for the running one (None = all sections)
 _running_lock = threading.Lock()
 
 
@@ -124,9 +125,17 @@ def _job(site_id: int, trigger: str, category_id: int | None = None):
                           (db.now(), "حافظه زیاد شد؛ مرورگر از نو باز شد و ادامه داده شد", site_id))
             trigger = "resume"
     finally:
+        stopped = visual.stop_requested(site_id)
         with _running_lock:
             _running.discard(site_id)
+            line = _queue.pop(site_id, [])
+            if stopped:  # the stop button also empties the line
+                line = []
+            if len(line) > 1:
+                _queue[site_id] = line[1:]
         visual.clear_stop(site_id)
+        if line:  # the next waiting section (None = all sections)
+            threading.Thread(target=_job, args=(site_id, "manual", line[0]), daemon=True).start()
 
 
 def sync_schedule(site: dict):
@@ -335,6 +344,7 @@ def list_categories(site_id: int):
             cat["item_count"] = c.execute("SELECT COUNT(*) FROM items WHERE category_id=?", (cat["id"],)).fetchone()[0]
             last = c.execute("SELECT * FROM runs WHERE category_id=? ORDER BY id DESC LIMIT 1", (cat["id"],)).fetchone()
             cat["last_run"] = dict(last) if last else None
+            cat["queued"] = cat["id"] in _queue.get(site_id, [])
     return cats
 
 
@@ -357,6 +367,8 @@ def _copy_settings(c, src_id: int, dst_id: int):
         raise HTTPException(400, "از این بخش نمی‌شود کپی کرد")
     cfg = json.loads(src["config"])
     cfg["list_url"] = json.loads(dst.get("config") or "{}").get("list_url", "")
+    # the sample profile belongs to the other list: the panel opens the first profile of this section's own list
+    cfg["profile_url"], cfg["link_count"] = "", 0
     c.execute("UPDATE categories SET config=?, mode='visual', fields='[]' WHERE id=?", (json.dumps(cfg, ensure_ascii=False), dst_id))
     sess = visual.session_file(src_id)
     if sess.exists():
@@ -804,9 +816,14 @@ def export_items(cid: int, fmt: str = "json", source: str = ""):
 
 # ---------- Runs ----------
 def _start(site_id: int, category_id: int | None):
+    """Start now, or (a run of this site is going: one browser per site) wait in line and start after it."""
+    with _running_lock:
+        if site_id in _running:
+            line = _queue.setdefault(site_id, [])
+            if category_id not in line:
+                line.append(category_id)
+            return {"queued": True, "position": line.index(category_id) + 1}
     visual.clear_stop(site_id)
-    if site_id in _running:
-        raise HTTPException(409, "این سایت در حال اجراست؛ کمی صبر کنید")
     threading.Thread(target=_job, args=(site_id, "manual", category_id), daemon=True).start()
     return {"started": True}
 

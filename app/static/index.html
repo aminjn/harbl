@@ -235,7 +235,7 @@ async function copyFrom(){const id=+$('#v-copy').value;if(!id)return;const s=cat
   try{await jpost(`/api/categories/${cat.id}/copy`,{source_id:id});vcfg=null;await loadCats(cat.id);toast(`تنظیمات «${s.name}» کپی شد`)}catch(err){toast(err.message)}}
 
 // ----- one section -----
-function lastRunText(lr){return lr?`آخرین اجرا ${fmt(lr.started_at)}: <span class="${lr.status}">${stName[lr.status]}</span>${lr.message?' — '+esc(lr.message):''}`:''}
+function lastRunText(lr){return (cat?.queued?'<b class="running">⏳ در صف: بعد از اجرای فعلی این سایت خودکار شروع می‌شود</b><br>':'')+(lr?`آخرین اجرا ${fmt(lr.started_at)}: <span class="${lr.status}">${stName[lr.status]}</span>${lr.message?' — '+esc(lr.message):''}`:'')}
 function renderCat(){
   if(!cat){$('#cat').innerHTML='<div class="empty">هنوز بخشی ندارید. «+ بخش جدید» را بزنید (مثلاً «پزشکان»).</div>';return}
   const lr=cat.last_run,vis=cat.mode==='visual';
@@ -332,7 +332,7 @@ function vRender(){if(!$('#vis'))return;
       <span><label style="margin:0">حداکثر صفحه</label><input type="number" min="1" max="2000" style="width:90px" value="${vcfg.max_pages}" oninput="vcfg.max_pages=+this.value||200" onchange="vSave(true)"></span></div>
     <small class="note" style="display:block;margin:4px 0 8px"><b>برای تخصص‌ها و شهرهای دیگر لازم نیست چیزی را دوباره انتخاب کنید:</b> آدرس صفحه لیستشان را در خط بعدی همین کادر بنویسید (هر خط یک آدرس). همه با همین تنظیمات صفحه پروفایل گرفته می‌شوند و در نتایج، هر آدرس دکمه جدای خودش را دارد. آدرس هیچ‌وقت خودکار عوض نمی‌شود.</small>
     <div class="frow" style="grid-template-columns:minmax(0,1fr) minmax(0,1.6fr) 30px"><b>🔗 لینک پروفایل</b>
-      <span>${vcfg.link_sample?okMark(true,`${vcfg.link_count?fa(vcfg.link_count)+' پروفایل در صفحه اول · ':''}<span dir="ltr">${esc(dec(vcfg.link_sample).replace(/^https?:\/\/[^/]+/,'').slice(0,60))}</span>`):okMark(false,'روی اسم یا «مشاهده پروفایل» یکی از پزشکان در صفحه لیست کلیک کنید')}</span>
+      <span>${vcfg.link_sample?okMark(true,`${vcfg.link_count?fa(vcfg.link_count)+' پروفایل در صفحه اول · ':''}شکل لینک‌ها: <span dir="ltr">/${esc(dec(vcfg.link_sample).replace(/^https?:\/\/[^/]+\//,'').split('/')[0])}/…</span>`):okMark(false,'روی اسم یا «مشاهده پروفایل» یکی از پزشکان در صفحه لیست کلیک کنید')}</span>
       ${vcfg.link_sample?`<button class="bad" onclick="vcfg.link_sample='';vcfg.link_count=0;vRender();vSave(true)" title="پاک کردن">✕</button>`:'<span></span>'}</div>
     <div class="frow" style="grid-template-columns:minmax(0,1fr) minmax(0,1.6fr) 30px"><b>⏭ دکمه صفحه بعد <small>(اختیاری)</small></b>
       <span>${vcfg.next_selectors.length?okMark(true,'انتخاب شد'):'<small>ندارد — صفحه‌های بعد با <code dir="ltr">?page=2</code> و … امتحان می‌شوند</small>'}</span>
@@ -340,8 +340,8 @@ function vRender(){if(!$('#vis'))return;
     <div class="row" style="margin-top:8px"><button class="pri" onclick="vOpen('list')">🎯 باز کردن صفحه لیست</button></div>
   </div>
   <div class="step"><b class="n">۲</b><b>صفحه پروفایل</b> <small>(همه اطلاعات از اینجا خوانده می‌شود؛ برای هر پزشک)</small>
-    <label style="margin-top:6px">آدرس یک پروفایل نمونه <small>(خالی = همان پروفایلی که در قسمت ۱ انتخاب کردید)</small></label>
-    <input id="v-prof" dir="ltr" value="${esc(vcfg.profile_url)}" placeholder="${esc(vcfg.link_sample||'مثلاً آدرس صفحه یکی از پزشکان')}" oninput="vcfg.profile_url=this.value.trim()" onchange="vSave(true)">
+    <label style="margin-top:6px">آدرس یک پروفایل نمونه <small>(خالی = اولین پزشکِ لیست همین بخش؛ فقط برای انتخاب و آزمایش است، جمع‌آوری از لیست همین بخش انجام می‌شود)</small></label>
+    <input id="v-prof" dir="ltr" value="${esc(vcfg.profile_url)}" placeholder="خالی = اولین پزشکِ لیست همین بخش" oninput="vcfg.profile_url=this.value.trim()" onchange="vSave(true)">
     <div style="margin-top:8px">${vcfg.fields.map((f,i)=>`<div class="frow" style="grid-template-columns:minmax(0,1fr) 90px minmax(0,1.4fr) 30px 30px 30px">
       <input type="text" value="${esc(f.name)}" placeholder="مثلاً نام، تخصص، تلفن، آدرس" oninput="vcfg.fields[${i}].name=this.value" onchange="vSave(true)">
       <select onchange="vcfg.fields[${i}].attr=this.value;vSave(true)">${Object.entries(ATTR).map(([k,v])=>`<option value="${k}" ${(f.attr||'text')===k?'selected':''}>${v}</option>`).join('')}</select>
@@ -377,15 +377,23 @@ async function vSave(quiet){if(!vcfg||vcfg._cid!==cat?.id)return;
 function vAddr(which){if(which==='profile')return vcfg.profile_url||vcfg.link_sample||'';
   return vUrls()[0]?vUrls()[0].replace('{page}','1'):''}
 // open the list or the sample profile; when the browser is already open just go there
-async function vOpen(which){await vSave(true);let url=vAddr(which);
+async function vOpen(which){await vSave(true);
+  if(which==='profile'&&!vcfg.profile_url&&vcfg.link_sample&&vUrls().length)return vOpenFirstProfile();
+  let url=vAddr(which);
   if(!url){toast(which==='list'?'اول آدرس صفحه لیست را بنویسید':'آدرس پروفایل نمونه را بنویسید یا در قسمت ۱ «لینک پروفایل» را انتخاب کنید');
     if(which==='list'||!$('#rec').classList.contains('hidden'))return;url=`https://${cur.allowed_domains[0]}/`}
-  if(!$('#rec').classList.contains('hidden')){recIn({type:'goto',url});vBar();return}
+  if(!$('#rec').classList.contains('hidden')){await recIn({type:'goto',url});vBar();return}
   toast('در حال باز کردن مرورگر…');
   try{const st=await api('/api/recorder');
     if(st.active&&st.category_id===cat.id){recOpen(st.url);recIn({type:'goto',url});return}
     const r=await jpost(`/api/categories/${cat.id}/recorder/start`,{url,record_har:false});if(r.warning)toast('صفحه کامل باز نشد؛ ادامه دهید');recOpen(r.url)}
   catch(err){toast(err.message)}}
+// the sample profile is the first doctor of THIS section's list (a copied section must not show the other list's doctor)
+async function vOpenFirstProfile(){await vOpen('list');toast('در حال پیدا کردن اولین پزشکِ همین لیست…');
+  for(let i=0;i<10;i++){await new Promise(r=>setTimeout(r,1500));
+    try{const l=await jpost('/api/recorder/links',{sample:vcfg.link_sample});
+      if(l.links?.length){await recIn({type:'goto',url:l.links[0]});toast('پروفایل اولین پزشکِ همین لیست باز شد');return}}catch{}}
+  toast('در این لیست پروفایلی پیدا نشد؛ پروفایل نمونه باز شد');recIn({type:'goto',url:vcfg.link_sample})}
 // chips above the remote browser, in two groups: arm one, then click the element on the page
 function vBar(){const bar=$('#rec-pick');if(!vcfg||cat?.mode!=='visual'){bar.innerHTML='';return}
   const chip=(key,label,done)=>`<button class="chip ${vArm===key?'on':''}" onclick="vArmSet('${key}')">${done?'✓ ':'🎯 '}${esc(label)}</button>`;
@@ -500,11 +508,12 @@ function watchRun(){watching=true;$('#btn-run')?.setAttribute('disabled','');$('
   poll=setInterval(async()=>{if(cur?.id!==id){watching=false;return clearInterval(poll)}
     const [cs]=await Promise.all([api(`/api/sites/${id}/categories`),loadSites()]);
     const c=cs.find(x=>x.id===cat?.id);
-    if(c){$('#cnt').textContent=fa(c.item_count);$('#lastrun').innerHTML=lastRunText(c.last_run)}
+    if(c){cat.queued=c.queued;$('#cnt').textContent=fa(c.item_count);$('#lastrun').innerHTML=lastRunText(c.last_run)}
     if(!cur.running){clearInterval(poll);watching=false;$('#btn-run-all')?.removeAttribute('disabled');$('#btn-stop')?.classList.add('hidden');await loadCats();
       toast('تمام شد'+(cat?.last_run?': '+stName[cat.last_run.status]:''))}},4000)}
-async function runCat(){try{await api(`/api/categories/${cat.id}/run`,{method:'POST'});toast('اجرا شروع شد');watchRun()}catch(err){toast(err.message)}}
-async function runAll(){try{await api(`/api/sites/${cur.id}/run`,{method:'POST'});toast('اجرای همه بخش‌ها شروع شد');watchRun()}catch(err){toast(err.message)}}
+const startedMsg=(r,what)=>r.queued?`${what} در صف است (نوبت ${fa(r.position)}): بعد از اجرای فعلی این سایت خودکار شروع می‌شود`:`${what} شروع شد`;
+async function runCat(){try{const r=await api(`/api/categories/${cat.id}/run`,{method:'POST'});toast(startedMsg(r,'اجرا'));if(r.queued)await loadCats(cat.id);watchRun()}catch(err){toast(err.message)}}
+async function runAll(){try{const r=await api(`/api/sites/${cur.id}/run`,{method:'POST'});toast(startedMsg(r,'اجرای همه بخش‌ها'));watchRun()}catch(err){toast(err.message)}}
 
 // ----- choose fields -----
 let fData=[];  // [{key,count,sample,on,label}] in display order (chosen first, in chosen order)
