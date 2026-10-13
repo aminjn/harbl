@@ -318,10 +318,18 @@ def _run_visual(cat: dict, site: dict, run_id: int, trigger: str) -> dict:
     stats = {"pages": 0, "rows": 0, "new": 0, "details": 0}
 
     def progress(st):
+        # where the run really is (a continued run counts from its saved position, not from zero)
+        if st.get("total"):
+            msg = (f"پروفایل {st['at']} از {st['total']}" + (f" (ادامه از {st['from'] + 1})" if st.get("from") else "")
+                   + f" · {st['new']} مورد جدید")
+        elif st.get("list_page"):
+            msg = (f"صفحه لیست {st['list_page']}" + (" (ادامه)" if st.get("list_resumed") else "")
+                   + f" · {st['rows']} پروفایل پیدا شده تا اینجا")
+        else:
+            msg = (f"{st['pages']} صفحه · {st['rows']} مورد ({st['new']} جدید)"
+                   + (f" · {st['details']} صفحه جزئیات" if st["details"] else ""))
         with db.conn() as c:
-            c.execute("UPDATE runs SET ok_count=?, message=? WHERE id=?",
-                      (st["pages"] + st["details"], f"{st['pages']} صفحه · {st['rows']} مورد ({st['new']} جدید)"
-                       + (f" · {st['details']} صفحه جزئیات" if st["details"] else ""), run_id))
+            c.execute("UPDATE runs SET ok_count=?, message=? WHERE id=?", (st["pages"] + st["details"], msg, run_id))
 
     try:
         check_contract(site)
@@ -343,6 +351,8 @@ def _run_visual(cat: dict, site: dict, run_id: int, trigger: str) -> dict:
         status = "ok" if not errors else ("partial" if stats["rows"] else "failed")
         message = (f"{stats['rows']} مورد از {stats['pages']} صفحه ({stats['new']} جدید"
                    + (f"، جزئیات {stats['details']}" if stats["details"] else "") + f") · مجموع این بخش: {total}")
+        if stats.get("from"):  # continued: say where from, so it is clear nothing started over
+            message = f"ادامه از پروفایل {stats['from'] + 1} از {stats['total']} · " + message
         if stats.get("stopped"):
             message = "متوقف شد (اجرای بعدی از همین‌جا ادامه می‌دهد) · " + message
         if trigger == "resume":

@@ -463,6 +463,7 @@ def run_profiles(cat: dict, site: dict, progress, log) -> dict:
     else:
         st = {"sig": sig, "started": db.now(), "lists": {}, "profiles": [], "origin": {}, "read": 0, "attempts": 0}
     profiles: list[str] = st["profiles"]
+    read_at_start = st["read"]
     origin: dict[str, str] = st["origin"]  # profile -> its list address (the group in the panel)
     _save_progress(cat["id"], st)
     _dedupe_profiles(cat["id"], sample)
@@ -596,7 +597,7 @@ def run_profiles(cat: dict, site: dict, progress, log) -> dict:
             say(f"صفحه لیست: {base}")
             if not open_(base.replace("{page}", "1")):
                 continue
-            n = 1
+            n, lst_start = 1, lst["page"]
             if lst["page"]:
                 # continue after the last page read before the restart: jump there, else walk the pages again
                 target, jumped = lst["page"] + 1, False
@@ -632,7 +633,7 @@ def run_profiles(cat: dict, site: dict, progress, log) -> dict:
                 lst["page"] = n
                 _save_progress(cat["id"], st)
                 stats["pages"] += 1
-                progress({**stats, "rows": len(profiles)})
+                progress({**stats, "rows": len(profiles), "list_page": n, "list_resumed": bool(lst_start)})
                 if n == max_pages or not to_next(base, n + 1):
                     if n < max_pages:
                         say(f"صفحه {n + 1}: صفحه بعدی پیدا نشد؛ پایان این لیست")
@@ -686,9 +687,10 @@ def run_profiles(cat: dict, site: dict, progress, log) -> dict:
             st["read"] = i
             if i % 10 == 0:
                 _save_progress(cat["id"], st)
-            progress(stats)
+            progress({**stats, "at": i, "total": len(profiles), "from": read_at_start})
         browser.close()
     stats["empty"] = {k: v for k, v in empty.items() if v}
+    stats["total"], stats["from"] = len(profiles), read_at_start
     finished = (not stats.get("stopped") and st["read"] >= len(profiles)
                 and all(st["lists"].get(b, {}).get("done") for b in urls))
     if finished:
