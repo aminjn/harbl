@@ -219,7 +219,7 @@ async function openSite(id,catId){cur=sites.find(s=>s.id===id);if(!cur)return;$(
   await loadCats(catId);if(cur.running)watchRun()}  // a run started earlier (or before a reload): follow it, with the stop button
 async function loadCats(selectId){cats=await api(`/api/sites/${cur.id}/categories`);
   const id=selectId??cat?.id;cat=cats.find(c=>c.id===id)||cats[0]||null;
-  $('#chips').innerHTML=cats.map(c=>`<button class="chip ${c.id===cat?.id?'on':''}" onclick="selectCat(${c.id})">${esc(c.name)} <small>(${fa(c.item_count)})</small></button>`).join('')
+  $('#chips').innerHTML=cats.map(c=>`<button class="chip ${c.id===cat?.id?'on':''}" onclick="selectCat(${c.id})">${c.running?'🔄 ':c.queued?'⏳ ':''}${esc(c.name)} <small>(${fa(c.item_count)})</small></button>`).join('')
     +'<button class="chip" onclick="addCat()">+ بخش جدید</button>';
   $('#btn-run-all').classList.toggle('hidden',cats.length<2);
   renderCat()}
@@ -235,7 +235,7 @@ async function copyFrom(){const id=+$('#v-copy').value;if(!id)return;const s=cat
   try{await jpost(`/api/categories/${cat.id}/copy`,{source_id:id});vcfg=null;await loadCats(cat.id);toast(`تنظیمات «${s.name}» کپی شد`)}catch(err){toast(err.message)}}
 
 // ----- one section -----
-function lastRunText(lr){return (cat?.queued?'<b class="running">⏳ در صف: بعد از اجرای فعلی این سایت خودکار شروع می‌شود</b><br>':'')+(lr?`آخرین اجرا ${fmt(lr.started_at)}: <span class="${lr.status}">${stName[lr.status]}</span>${lr.message?' — '+esc(lr.message):''}`:'')}
+function lastRunText(lr){return (cat?.queued?'<b class="running">⏳ در صف: وقتی یکی از اجراهای در جریان تمام شود خودکار شروع می‌شود</b><br>':'')+(lr?`آخرین اجرا ${fmt(lr.started_at)}: <span class="${lr.status}">${stName[lr.status]}</span>${lr.message?' — '+esc(lr.message):''}`:'')}
 function renderCat(){
   if(!cat){$('#cat').innerHTML='<div class="empty">هنوز بخشی ندارید. «+ بخش جدید» را بزنید (مثلاً «پزشکان»).</div>';return}
   const lr=cat.last_run,vis=cat.mode==='visual';
@@ -245,8 +245,8 @@ function renderCat(){
     <div class="row" style="justify-content:space-between">
       <h3 style="margin:0">${esc(cat.name)} <button class="bad" style="font-size:12px;padding:2px 8px;margin-inline-start:6px" onclick="delCat()" title="حذف این بخش و داده‌هایش">🗑 حذف بخش</button></h3>
       <div class="row">
-        <button class="pri big" id="btn-run" onclick="runCat()" ${ready?'':'disabled'}>▶ گرفتن داده این بخش</button>
-        <button class="bad ${cur?.running?'':'hidden'}" id="btn-stop" onclick="stopRun()">■ توقف</button>
+        <button class="pri big" id="btn-run" onclick="runCat()" ${ready&&!cat.running&&!cat.queued?'':'disabled'}>▶ گرفتن داده این بخش</button>
+        <button class="bad ${cat.running||cat.queued?'':'hidden'}" id="btn-stop" onclick="stopRun()">■ توقف این بخش</button>
         ${vis?'':`<button onclick="recStart()">🎥 ضبط با مرورگر</button><button onclick="$('#har-input').click()">↻ آپلود HAR</button>`}
       </div>
     </div>
@@ -371,7 +371,7 @@ async function vSave(quiet){if(!vcfg||vcfg._cid!==cat?.id)return;
   try{const c=await jpost(`/api/categories/${cat.id}/visual`,vPayload(),'PUT');
     cat.config=c.config;vcfg.list_url=c.config.list_url;const ta=$('#v-url');if(ta&&document.activeElement!==ta)ta.value=vcfg.list_url;
     vErr=(c.warnings||[]).map(esc).join('<br>');vShowErr();
-    if(!quiet)toast('ذخیره شد');const b=$('#btn-run');if(b)b.disabled=!vReady();
+    if(!quiet)toast('ذخیره شد');const b=$('#btn-run');if(b)b.disabled=!vReady()||cat.running||cat.queued;
     if($('#data')&&cat.item_count)loadItems()}
   catch(err){vErr='ذخیره نشد: '+esc(err.message)+' — تنظیمات روی صفحه می‌ماند؛ مشکل را رفع کنید و دوباره «ذخیره تنظیمات» را بزنید.';vShowErr();toast('ذخیره نشد: '+err.message)}}
 function vAddr(which){if(which==='profile')return vcfg.profile_url||vcfg.link_sample||'';
@@ -501,19 +501,27 @@ async function loadItems(){const d=await api(`/api/categories/${cat.id}/items?li
     :`<p class="note">${q?'نتیجه‌ای پیدا نشد.':'هنوز داده‌ای جمع نشده. «▶ گرفتن داده این بخش» را بزنید.'}</p>`}`}
 function setSrc(v){src=v;page=0;loadItems()}
 
-async function stopRun(){try{const r=await api(`/api/sites/${cur.id}/stop`,{method:'POST'});
-  toast(r.stopping?'در حال توقف… بعد از همین صفحه می‌ایستد؛ آنچه جمع شده می‌ماند':'اجرایی در جریان نیست')}catch(err){toast(err.message)}}
+async function stopRun(){try{const r=await api(`/api/categories/${cat.id}/stop`,{method:'POST'});
+  toast(r.stopping?'در حال توقف این بخش… بعد از همین صفحه می‌ایستد؛ آنچه جمع شده می‌ماند':r.unqueued?'از صف بیرون آمد':'اجرایی در جریان نیست');
+  setTimeout(()=>loadCats(cat.id),1500)}catch(err){toast(err.message)}}
+// the open section's buttons: busy = running or waiting in line (other sections can run at the same time)
+function catBusy(c){const busy=!!(c?.running||c?.queued);const b=$('#btn-run');if(b)b.disabled=busy||(cat?.mode==='visual'?!vReady():!cat?.request_count);
+  $('#btn-stop')?.classList.toggle('hidden',!busy)}
 let watching=false;
-function watchRun(){watching=true;$('#btn-run')?.setAttribute('disabled','');$('#btn-run-all')?.setAttribute('disabled','');$('#btn-stop')?.classList.remove('hidden');const id=cur.id;clearInterval(poll);
+function watchRun(){watching=true;const id=cur.id;clearInterval(poll);catBusy(cat);
   poll=setInterval(async()=>{if(cur?.id!==id){watching=false;return clearInterval(poll)}
     const [cs]=await Promise.all([api(`/api/sites/${id}/categories`),loadSites()]);
     const c=cs.find(x=>x.id===cat?.id);
-    if(c){cat.queued=c.queued;$('#cnt').textContent=fa(c.item_count);$('#lastrun').innerHTML=lastRunText(c.last_run)}
-    if(!cur.running){clearInterval(poll);watching=false;$('#btn-run-all')?.removeAttribute('disabled');$('#btn-stop')?.classList.add('hidden');await loadCats();
-      toast('تمام شد'+(cat?.last_run?': '+stName[cat.last_run.status]:''))}},4000)}
-const startedMsg=(r,what)=>r.queued?`${what} در صف است (نوبت ${fa(r.position)}): بعد از اجرای فعلی این سایت خودکار شروع می‌شود`:`${what} شروع شد`;
-async function runCat(){try{const r=await api(`/api/categories/${cat.id}/run`,{method:'POST'});toast(startedMsg(r,'اجرا'));if(r.queued)await loadCats(cat.id);watchRun()}catch(err){toast(err.message)}}
-async function runAll(){try{const r=await api(`/api/sites/${cur.id}/run`,{method:'POST'});toast(startedMsg(r,'اجرای همه بخش‌ها'));watchRun()}catch(err){toast(err.message)}}
+    if(c){const was=cat.running||cat.queued;Object.assign(cat,{queued:c.queued,running:c.running,last_run:c.last_run,item_count:c.item_count});
+      $('#cnt').textContent=fa(c.item_count);$('#lastrun').innerHTML=lastRunText(c.last_run);catBusy(c);
+      if(was&&!c.running&&!c.queued)toast(`«${cat.name}» تمام شد: ${stName[c.last_run?.status]||''}`)}
+    // section chips: a dot on the ones collecting now
+    cs.forEach(x=>{const ch=[...document.querySelectorAll('#chips .chip')].find(e=>e.getAttribute('onclick')===`selectCat(${x.id})`);
+      if(ch)ch.innerHTML=`${x.running?'🔄 ':x.queued?'⏳ ':''}${esc(x.name)} <small>(${fa(x.item_count)})</small>`});
+    if(!cur.running){clearInterval(poll);watching=false;await loadCats()}},4000)}
+const startedMsg=(r,what)=>r.queued?`${what} در صف است (نوبت ${fa(r.position)}): وقتی یکی از اجراهای در جریان تمام شود خودکار شروع می‌شود`:r.running?`${what} همین الان در جریان است`:`${what} شروع شد`;
+async function runCat(){try{const r=await api(`/api/categories/${cat.id}/run`,{method:'POST'});toast(startedMsg(r,'اجرا'));await loadCats(cat.id);watchRun()}catch(err){toast(err.message)}}
+async function runAll(){try{const r=await api(`/api/sites/${cur.id}/run`,{method:'POST'});toast(`${fa(r.started)} بخش شروع شد`+(r.queued?` و ${fa(r.queued)} بخش در صف است`:''));await loadCats(cat?.id);watchRun()}catch(err){toast(err.message)}}
 
 // ----- choose fields -----
 let fData=[];  // [{key,count,sample,on,label}] in display order (chosen first, in chosen order)

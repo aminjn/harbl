@@ -423,22 +423,22 @@ def _save_progress(category_id: int, st: dict):
     tmp = progress_file(category_id).with_suffix(".tmp")
     tmp.write_text(json.dumps(st, ensure_ascii=False), encoding="utf-8")
     tmp.replace(progress_file(category_id))
-def stop_file(site_id: int) -> Path:
-    return PROGRESS / f"stop_site_{site_id}"
+def stop_file(site_id: int, category_id: int | None = None) -> Path:
+    return PROGRESS / (f"stop_cat_{category_id}" if category_id else f"stop_site_{site_id}")
 
 
-def stop_requested(site_id) -> bool:
-    """The panel's stop button (a file: the collection runs in its own process)."""
-    return site_id is not None and stop_file(site_id).exists()
+def stop_requested(site_id, category_id=None) -> bool:
+    """The panel's stop button (a file: each collection runs in its own process)."""
+    return (site_id is not None and stop_file(site_id).exists()) or bool(category_id and stop_file(site_id, category_id).exists())
 
 
-def request_stop(site_id: int):
+def request_stop(site_id: int, category_id: int | None = None):
     PROGRESS.mkdir(parents=True, exist_ok=True)
-    stop_file(site_id).touch()
+    stop_file(site_id, category_id).touch()
 
 
-def clear_stop(site_id: int):
-    stop_file(site_id).unlink(missing_ok=True)
+def clear_stop(site_id: int, category_id: int | None = None):
+    stop_file(site_id, category_id).unlink(missing_ok=True)
 
 
 def run_profiles(cat: dict, site: dict, progress, log) -> dict:
@@ -487,7 +487,7 @@ def run_profiles(cat: dict, site: dict, progress, log) -> dict:
         opened = [0]
 
         def stopped() -> bool:
-            if stop_requested(site.get("id")):
+            if stop_requested(site.get("id"), cat["id"]):
                 stats["stopped"] = True
                 say("متوقف شد (دکمه توقف)")
                 return True

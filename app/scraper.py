@@ -339,7 +339,7 @@ def _run_visual(cat: dict, site: dict, run_id: int, trigger: str) -> dict:
                 break
             except Exception as e:
                 # the browser was closed or crashed mid-run: open a new one and continue from the saved progress
-                if attempt < 3 and _browser_died(e) and visual.progress_file(cat["id"]).exists() and not visual.stop_requested(site["id"]):
+                if attempt < 3 and _browser_died(e) and visual.progress_file(cat["id"]).exists() and not visual.stop_requested(site["id"], cat["id"]):
                     log.append({"note": f"مرورگر بسته شد؛ ادامه از همان‌جا (بار {attempt + 1})"})
                     print(f"[بخش {cat['id']}] مرورگر بسته شد؛ ادامه از همان‌جا", flush=True)
                     time.sleep(5)

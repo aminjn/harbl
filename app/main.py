@@ -26,12 +26,12 @@ from .config import ADMIN_PASS, ADMIN_USER, DATA_DIR, FEED_KEY, OUTPUT_DIR
 
 STATIC = Path(__file__).parent / "static"
 scheduler = BackgroundScheduler(timezone="UTC")
-_running: set[int] = set()
-_queue: dict[int, list] = {}  # site id -> sections waiting for the running one (None = all sections)
+# Each section runs on its own (a process with its own browser); several at once, the rest wait in one line.
+_running: dict[int, int] = {}  # section id -> site id
+_queue: list[tuple[int, int, str]] = []  # (site id, section id, trigger) waiting for a free slot
 _running_lock = threading.Lock()
-
-
-MEM_SHARE = 0.4  # a run (its browser included) may use at most this share of the server's RAM
+MAX_PARALLEL = int(os.environ.get("HARSCRAPER_PARALLEL") or 3)
+MEM_SHARE = 0.6  # all runs together (browsers included) may use at most this share of the server's RAM
 
 
 def _mem_total() -> int:
@@ -87,19 +87,15 @@ def _kill_run(tag: str):
             pass
 
 
-def _job(site_id: int, trigger: str, category_id: int | None = None):
-    """Collections run in their own process group at low priority: a heavy browser run must never make the panel
-    unresponsive (it did when it ran inside this process: 504s). Output goes to the same journal.
-    A run whose memory grows past MEM_SHARE of the RAM is killed and continued from its saved progress, and
+def _job(site_id: int, trigger: str, category_id: int):
+    """One section's collection, in its own process group at low priority: a heavy browser run must never make the
+    panel unresponsive (it did when it ran inside this process: 504s). Output goes to the same journal.
+    A run whose memory grows past its share of the RAM is killed and continued from its saved progress, and
     whatever browser processes a run leaves behind are killed when it ends."""
-    with _running_lock:
-        if site_id in _running:
-            return
-        _running.add(site_id)
-    limit = int(os.environ.get("HARSCRAPER_RUN_MEM_MB") or 0) * 2**20 or int(_mem_total() * MEM_SHARE)
+    fixed = int(os.environ.get("HARSCRAPER_RUN_MEM_MB") or 0) * 2**20
     try:
         for attempt in range(4):
-            cmd = [sys.executable, "-m", "app.worker", str(site_id), trigger, str(category_id or "")]
+            cmd = [sys.executable, "-m", "app.worker", str(site_id), trigger, str(category_id)]
             if shutil.which("nice"):
                 cmd = ["nice", "-n", "10"] + cmd
             tag = secrets.token_hex(8)
@@ -110,32 +106,63 @@ def _job(site_id: int, trigger: str, category_id: int | None = None):
                 try:
                     proc.wait(timeout=5)
                 except subprocess.TimeoutExpired:
+                    limit = fixed or int(_mem_total() * MEM_SHARE / max(len(_running), 1))  # shared by the runs going
                     used = sum(r for _, r in _run_procs(tag))
                     if limit and used > limit:
-                        print(f"[سایت {site_id}] حافظه اجرا {used // 2**20}MB شد (سقف {limit // 2**20}MB)؛ "
+                        print(f"[بخش {category_id}] حافظه اجرا {used // 2**20}MB شد (سقف {limit // 2**20}MB)؛ "
                               "مرورگر بسته و از همان‌جا ادامه داده می‌شود", flush=True)
                         too_big = True
                         _kill_run(tag)
                         proc.wait()
             _kill_run(tag)  # browser processes left behind by the run
-            if not too_big or visual.stop_requested(site_id):
+            if not too_big or visual.stop_requested(site_id, category_id):
                 break
             with db.conn() as c:  # the killed run never wrote its end
-                c.execute("UPDATE runs SET status='failed', finished_at=?, message=? WHERE site_id=? AND status='running'",
-                          (db.now(), "حافظه زیاد شد؛ مرورگر از نو باز شد و ادامه داده شد", site_id))
+                c.execute("UPDATE runs SET status='failed', finished_at=?, message=? WHERE category_id=? AND status='running'",
+                          (db.now(), "حافظه زیاد شد؛ مرورگر از نو باز شد و ادامه داده شد", category_id))
             trigger = "resume"
     finally:
-        stopped = visual.stop_requested(site_id)
         with _running_lock:
-            _running.discard(site_id)
-            line = _queue.pop(site_id, [])
-            if stopped:  # the stop button also empties the line
-                line = []
-            if len(line) > 1:
-                _queue[site_id] = line[1:]
-        visual.clear_stop(site_id)
-        if line:  # the next waiting section (None = all sections)
-            threading.Thread(target=_job, args=(site_id, "manual", line[0]), daemon=True).start()
+            _running.pop(category_id, None)
+        visual.clear_stop(site_id, category_id)
+        _start_waiting()
+
+
+def _start_waiting():
+    """Fill the free slots from the line."""
+    with _running_lock:
+        go = []
+        while _queue and len(_running) < MAX_PARALLEL:
+            site_id, cid, trigger = _queue.pop(0)
+            if cid in _running:
+                continue
+            _running[cid] = site_id
+            go.append((site_id, cid, trigger))
+    for site_id, cid, trigger in go:
+        visual.clear_stop(site_id, cid)
+        threading.Thread(target=_job, args=(site_id, trigger, cid), daemon=True).start()
+
+
+def _start(site_id: int, category_id: int, trigger: str = "manual") -> dict:
+    """Start the section now if a slot is free, else put it in the line (it starts when one ends)."""
+    with _running_lock:
+        if category_id in _running:
+            return {"running": True}
+        if not any(q[1] == category_id for q in _queue):
+            _queue.append((site_id, category_id, trigger))
+    _start_waiting()
+    with _running_lock:
+        if category_id in _running:
+            return {"started": True}
+        return {"queued": True, "position": next(i for i, q in enumerate(_queue, 1) if q[1] == category_id)}
+
+
+def _start_site(site_id: int, trigger: str = "manual") -> dict:
+    """Every section of a site (they run side by side as slots allow)."""
+    with db.conn() as c:
+        ids = [r["id"] for r in c.execute("SELECT id FROM categories WHERE site_id=? ORDER BY id", (site_id,))]
+    out = [_start(site_id, cid, trigger) for cid in ids]
+    return {"started": sum(1 for o in out if o.get("started")), "queued": sum(1 for o in out if o.get("queued"))}
 
 
 def sync_schedule(site: dict):
@@ -143,7 +170,7 @@ def sync_schedule(site: dict):
     if scheduler.get_job(job_id):
         scheduler.remove_job(job_id)
     if site["enabled"] and site.get("schedule_minutes"):
-        scheduler.add_job(_job, "interval", minutes=site["schedule_minutes"], id=job_id,
+        scheduler.add_job(_start_site, "interval", minutes=site["schedule_minutes"], id=job_id,
                           args=[site["id"], "schedule"], max_instances=1, coalesce=True)
 
 
@@ -165,13 +192,14 @@ def _resume_cut_runs():
         else:
             f.unlink(missing_ok=True)
 
-    def go(site_id: int, cids: list[int]):
+    def go():
         time.sleep(15)  # let the server finish starting
-        for cid in cids:
-            _job(site_id, "resume", cid)
+        for site_id, cids in by_site.items():
+            for cid in cids:
+                _start(site_id, cid, "resume")
 
-    for site_id, cids in by_site.items():
-        threading.Thread(target=go, args=(site_id, cids), daemon=True).start()
+    if by_site:
+        threading.Thread(target=go, daemon=True).start()
 
 
 async def lifespan(app):
@@ -265,7 +293,7 @@ def list_sites():
             s["last_run"] = dict(last) if last else None
             job = scheduler.get_job(f"site_{s['id']}")
             s["next_run"] = job.next_run_time.isoformat() if job and job.next_run_time else None
-            s["running"] = s["id"] in _running
+            s["running"] = s["id"] in _running.values()
     return sites
 
 
@@ -344,7 +372,8 @@ def list_categories(site_id: int):
             cat["item_count"] = c.execute("SELECT COUNT(*) FROM items WHERE category_id=?", (cat["id"],)).fetchone()[0]
             last = c.execute("SELECT * FROM runs WHERE category_id=? ORDER BY id DESC LIMIT 1", (cat["id"],)).fetchone()
             cat["last_run"] = dict(last) if last else None
-            cat["queued"] = cat["id"] in _queue.get(site_id, [])
+            cat["queued"] = any(q[1] == cat["id"] for q in _queue)
+            cat["running"] = cat["id"] in _running
     return cats
 
 
@@ -815,33 +844,36 @@ def export_items(cid: int, fmt: str = "json", source: str = ""):
 
 
 # ---------- Runs ----------
-def _start(site_id: int, category_id: int | None):
-    """Start now, or (a run of this site is going: one browser per site) wait in line and start after it."""
-    with _running_lock:
-        if site_id in _running:
-            line = _queue.setdefault(site_id, [])
-            if category_id not in line:
-                line.append(category_id)
-            return {"queued": True, "position": line.index(category_id) + 1}
-    visual.clear_stop(site_id)
-    threading.Thread(target=_job, args=(site_id, "manual", category_id), daemon=True).start()
-    return {"started": True}
-
-
 @app.post("/api/sites/{site_id}/run", dependencies=[Depends(auth)])
 def run_site_now(site_id: int):
     with db.conn() as c:
         _get_site(c, site_id)
-    return _start(site_id, None)
+    return _start_site(site_id)
 
 
 @app.post("/api/sites/{site_id}/stop", dependencies=[Depends(auth)])
 def stop_site_run(site_id: int):
-    """End the running collection after the page it is on; what was gathered stays."""
-    if site_id not in _running:
-        return {"stopping": False}
-    visual.request_stop(site_id)
-    return {"stopping": True}
+    """Every running section of the site ends after the page it is on (what was gathered stays); the waiting ones are dropped."""
+    with _running_lock:
+        _queue[:] = [q for q in _queue if q[0] != site_id]
+        going = [cid for cid, sid in _running.items() if sid == site_id]
+    for cid in going:
+        visual.request_stop(site_id, cid)
+    return {"stopping": bool(going)}
+
+
+@app.post("/api/categories/{cid}/stop", dependencies=[Depends(auth)])
+def stop_category_run(cid: int):
+    """This section only: stop it if running, or take it out of the line."""
+    with db.conn() as c:
+        cat = _get_cat(c, cid)
+    with _running_lock:
+        waiting = any(q[1] == cid for q in _queue)
+        _queue[:] = [q for q in _queue if q[1] != cid]
+        going = cid in _running
+    if going:
+        visual.request_stop(cat["site_id"], cid)
+    return {"stopping": going, "unqueued": waiting}
 
 
 @app.post("/api/categories/{cid}/run", dependencies=[Depends(auth)])
