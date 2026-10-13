@@ -686,6 +686,7 @@ def run_profiles(cat: dict, site: dict, progress, log) -> dict:
                                       source=origin.get(href))
             st["read"] = i
             if i % 10 == 0:
+                st["attempts"] = 0  # it moves forward: a later restart may continue it again
                 _save_progress(cat["id"], st)
             progress({**stats, "at": i, "total": len(profiles), "from": read_at_start})
         browser.close()
