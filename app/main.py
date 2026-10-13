@@ -2,7 +2,9 @@
 import csv
 import io
 import json
+import os
 import secrets
+import signal
 import shutil
 import subprocess
 import sys
@@ -28,18 +30,99 @@ _running: set[int] = set()
 _running_lock = threading.Lock()
 
 
+MEM_SHARE = 0.4  # a run (its browser included) may use at most this share of the server's RAM
+
+
+def _mem_total() -> int:
+    try:
+        with open("/proc/meminfo") as f:
+            return int(f.readline().split()[1]) * 1024
+    except (OSError, ValueError, IndexError):
+        return 0
+
+
+def _run_procs(tag: str) -> list[tuple[int, int]]:
+    """(pid, bytes in RAM) of every process of a run: python, the Playwright driver, the browser and the browser's
+    helpers. The browser starts in its own process group and its helpers get a clean environment, so: the
+    processes carrying the run's HARSCRAPER_RUN_TAG, plus everything they started."""
+    want, parent, tagged = f"HARSCRAPER_RUN_TAG={tag}".encode(), {}, []
+    for d in Path("/proc").iterdir():
+        if not d.name.isdigit():
+            continue
+        try:
+            parent[int(d.name)] = int((d / "stat").read_text().rsplit(")", 1)[1].split()[1])
+            if want in (d / "environ").read_bytes().split(b"\0"):
+                tagged.append(int(d.name))
+        except (OSError, ValueError, IndexError):
+            continue
+    children: dict[int, list[int]] = {}
+    for pid, ppid in parent.items():
+        children.setdefault(ppid, []).append(pid)
+    seen, todo = set(), list(tagged)
+    while todo:
+        pid = todo.pop()
+        if pid not in seen:
+            seen.add(pid)
+            todo.extend(children.get(pid, []))
+    out = []
+    for pid in seen:
+        d = Path("/proc") / str(pid)
+        try:  # proportional share: memory the browser's processes share is counted once
+            mem = next(int(l.split()[1]) * 1024 for l in (d / "smaps_rollup").read_text().splitlines() if l.startswith("Pss:"))
+        except (OSError, StopIteration, ValueError):
+            try:
+                mem = int((d / "stat").read_text().rsplit(")", 1)[1].split()[21]) * 4096
+            except (OSError, ValueError, IndexError):
+                continue
+        out.append((pid, mem))
+    return out
+
+
+def _kill_run(tag: str):
+    for pid, _ in _run_procs(tag):
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+
+
 def _job(site_id: int, trigger: str, category_id: int | None = None):
-    """Collections run in their own process at low priority: a heavy browser run must never make the panel
-    unresponsive (it did when it ran inside this process: 504s). Output goes to the same journal."""
+    """Collections run in their own process group at low priority: a heavy browser run must never make the panel
+    unresponsive (it did when it ran inside this process: 504s). Output goes to the same journal.
+    A run whose memory grows past MEM_SHARE of the RAM is killed and continued from its saved progress, and
+    whatever browser processes a run leaves behind are killed when it ends."""
     with _running_lock:
         if site_id in _running:
             return
         _running.add(site_id)
+    limit = int(os.environ.get("HARSCRAPER_RUN_MEM_MB") or 0) * 2**20 or int(_mem_total() * MEM_SHARE)
     try:
-        cmd = [sys.executable, "-m", "app.worker", str(site_id), trigger, str(category_id or "")]
-        if shutil.which("nice"):
-            cmd = ["nice", "-n", "10"] + cmd
-        subprocess.run(cmd, cwd=Path(__file__).resolve().parent.parent, check=False)
+        for attempt in range(4):
+            cmd = [sys.executable, "-m", "app.worker", str(site_id), trigger, str(category_id or "")]
+            if shutil.which("nice"):
+                cmd = ["nice", "-n", "10"] + cmd
+            tag = secrets.token_hex(8)
+            proc = subprocess.Popen(cmd, cwd=Path(__file__).resolve().parent.parent, start_new_session=True,
+                                    env={**os.environ, "HARSCRAPER_RUN_TAG": tag})
+            too_big = False
+            while proc.poll() is None:
+                try:
+                    proc.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    used = sum(r for _, r in _run_procs(tag))
+                    if limit and used > limit:
+                        print(f"[سایت {site_id}] حافظه اجرا {used // 2**20}MB شد (سقف {limit // 2**20}MB)؛ "
+                              "مرورگر بسته و از همان‌جا ادامه داده می‌شود", flush=True)
+                        too_big = True
+                        _kill_run(tag)
+                        proc.wait()
+            _kill_run(tag)  # browser processes left behind by the run
+            if not too_big or visual.stop_requested(site_id):
+                break
+            with db.conn() as c:  # the killed run never wrote its end
+                c.execute("UPDATE runs SET status='failed', finished_at=?, message=? WHERE site_id=? AND status='running'",
+                          (db.now(), "حافظه زیاد شد؛ مرورگر از نو باز شد و ادامه داده شد", site_id))
+            trigger = "resume"
     finally:
         with _running_lock:
             _running.discard(site_id)
