@@ -75,7 +75,8 @@ def now() -> str:
 @contextmanager
 def conn():
     with _lock:
-        c = sqlite3.connect(DB_PATH)
+        # the panel and a collection process share the file: wait for the other's write instead of failing
+        c = sqlite3.connect(DB_PATH, timeout=30)
         c.row_factory = sqlite3.Row
         c.execute("PRAGMA foreign_keys = ON")
         try:
@@ -88,6 +89,7 @@ def conn():
 def init():
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     with conn() as c:
+        c.execute("PRAGMA journal_mode=WAL")  # readers (the panel) are not blocked while a run writes
         c.executescript(SCHEMA)
         # Migrations for databases created by older versions
         cols = {r["name"] for r in c.execute("PRAGMA table_info(sites)")}

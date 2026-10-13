@@ -3,6 +3,9 @@ import csv
 import io
 import json
 import secrets
+import shutil
+import subprocess
+import sys
 import threading
 import time
 from contextlib import asynccontextmanager
@@ -26,16 +29,21 @@ _running_lock = threading.Lock()
 
 
 def _job(site_id: int, trigger: str, category_id: int | None = None):
+    """Collections run in their own process at low priority: a heavy browser run must never make the panel
+    unresponsive (it did when it ran inside this process: 504s). Output goes to the same journal."""
     with _running_lock:
         if site_id in _running:
             return
         _running.add(site_id)
     try:
-        scraper.run_site(site_id, trigger, category_id)
+        cmd = [sys.executable, "-m", "app.worker", str(site_id), trigger, str(category_id or "")]
+        if shutil.which("nice"):
+            cmd = ["nice", "-n", "10"] + cmd
+        subprocess.run(cmd, cwd=Path(__file__).resolve().parent.parent, check=False)
     finally:
         with _running_lock:
             _running.discard(site_id)
-        visual.STOP.discard(site_id)
+        visual.clear_stop(site_id)
 
 
 def sync_schedule(site: dict):
@@ -694,7 +702,7 @@ def export_items(cid: int, fmt: str = "json", source: str = ""):
 
 # ---------- Runs ----------
 def _start(site_id: int, category_id: int | None):
-    visual.STOP.discard(site_id)
+    visual.clear_stop(site_id)
     if site_id in _running:
         raise HTTPException(409, "این سایت در حال اجراست؛ کمی صبر کنید")
     threading.Thread(target=_job, args=(site_id, "manual", category_id), daemon=True).start()
@@ -713,7 +721,7 @@ def stop_site_run(site_id: int):
     """End the running collection after the page it is on; what was gathered stays."""
     if site_id not in _running:
         return {"stopping": False}
-    visual.STOP.add(site_id)
+    visual.request_stop(site_id)
     return {"stopping": True}
 
 

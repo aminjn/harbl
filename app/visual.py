@@ -423,7 +423,22 @@ def _save_progress(category_id: int, st: dict):
     tmp = progress_file(category_id).with_suffix(".tmp")
     tmp.write_text(json.dumps(st, ensure_ascii=False), encoding="utf-8")
     tmp.replace(progress_file(category_id))
-STOP: set[int] = set()  # site ids whose running collection should end (panel's stop button)
+def stop_file(site_id: int) -> Path:
+    return PROGRESS / f"stop_site_{site_id}"
+
+
+def stop_requested(site_id) -> bool:
+    """The panel's stop button (a file: the collection runs in its own process)."""
+    return site_id is not None and stop_file(site_id).exists()
+
+
+def request_stop(site_id: int):
+    PROGRESS.mkdir(parents=True, exist_ok=True)
+    stop_file(site_id).touch()
+
+
+def clear_stop(site_id: int):
+    stop_file(site_id).unlink(missing_ok=True)
 
 
 def run_profiles(cat: dict, site: dict, progress, log) -> dict:
@@ -453,8 +468,10 @@ def run_profiles(cat: dict, site: dict, progress, log) -> dict:
     _dedupe_profiles(cat["id"], sample)
 
     with sync_playwright() as pw:
-        browser = pw.chromium.launch(args=["--disable-dev-shm-usage"])
+        browser = pw.chromium.launch(args=["--disable-dev-shm-usage", "--disable-gpu", "--disable-extensions", "--mute-audio",
+                                           "--js-flags=--max-old-space-size=512"])
         sess = session_file(cat["id"])
+
         def fresh(state):
             """A new browser tab set. Pictures, videos and fonts are not loaded: only text and addresses are read
             (a picture field keeps its address), and a long run stays light for the server."""
@@ -469,7 +486,7 @@ def run_profiles(cat: dict, site: dict, progress, log) -> dict:
         opened = [0]
 
         def stopped() -> bool:
-            if site.get("id") in STOP:
+            if stop_requested(site.get("id")):
                 stats["stopped"] = True
                 say("متوقف شد (دکمه توقف)")
                 return True
@@ -627,8 +644,9 @@ def run_profiles(cat: dict, site: dict, progress, log) -> dict:
         # 2) every profile: read the picked fields
         empty = {f["name"]: 0 for f in fields}
         done_before = st["read"] if not stopped() else len(profiles)
-        say(f"{len(profiles)} پروفایل پیدا شد؛ خواندن پروفایل‌ها…"
-            + (f" (ادامه از پروفایل {done_before + 1})" if done_before else ""))
+        if not stats.get("stopped"):
+            say(f"{len(profiles)} پروفایل پیدا شد؛ خواندن پروفایل‌ها…"
+                + (f" (ادامه از پروفایل {done_before + 1})" if done_before else ""))
         for i, href in enumerate(profiles, 1):
             if i <= done_before:  # read before the restart
                 continue

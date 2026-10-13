@@ -331,7 +331,7 @@ def _run_visual(cat: dict, site: dict, run_id: int, trigger: str) -> dict:
                 break
             except Exception as e:
                 # the browser was closed or crashed mid-run: open a new one and continue from the saved progress
-                if attempt < 3 and _browser_died(e) and visual.progress_file(cat["id"]).exists() and site["id"] not in visual.STOP:
+                if attempt < 3 and _browser_died(e) and visual.progress_file(cat["id"]).exists() and not visual.stop_requested(site["id"]):
                     log.append({"note": f"مرورگر بسته شد؛ ادامه از همان‌جا (بار {attempt + 1})"})
                     print(f"[بخش {cat['id']}] مرورگر بسته شد؛ ادامه از همان‌جا", flush=True)
                     time.sleep(5)
@@ -379,7 +379,7 @@ def run_site(site_id: int, trigger: str = "manual", category_id: int | None = No
             r["id"] for r in c.execute("SELECT id FROM categories WHERE site_id=? ORDER BY id", (site_id,))]
     out = []
     for cid in ids:
-        if site_id in visual.STOP:  # the stop button also skips the sections not started yet
+        if visual.stop_requested(site_id):  # the stop button also skips the sections not started yet
             break
         out.append(run_category(cid, trigger))
     return out
