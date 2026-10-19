@@ -169,7 +169,31 @@ PICK_JS = r"""
       if (framed && r.height > 60 && r.width > 200 && a.querySelector('a[href]')) { listHint = sibs.length; break; }
     }
   }
-  return {selector, selectors, count: document.querySelectorAll(selector).length, samples: [value(el)], list_hint: listHint};
+  // a "label: value" spot (spec tables, "برند: X" lines): remember the label, so other pages are read by the label
+  // wherever its row sits, not by the position the row had on this page
+  const norm = t => (t || '').replace(/\s+/g, ' ').trim();
+  const lab = t => norm(t).replace(/[:：\s]+$/, '');
+  const isLabel = t => { t = lab(t); return t.length >= 2 && t.length <= 40 && !/\d{3,}/.test(t); };
+  let label = null, labelMode = null;
+  // a "label: value" text is a whole row, never a label of something else
+  const pair = t => /[:：]\s*\S/.test(norm(t));
+  // looks like a label: "…:" or a header/bold title, or a cell of a table row / list item / definition list
+  const labelish = x => /[:：]\s*$/.test(norm(x.textContent)) || /^(TH|DT|LABEL|B|STRONG)$/.test(x.tagName) || !!x.closest('tr,li,dl');
+  if (attr === 'text') {
+    const own = norm(el.textContent), prev = el.previousElementSibling;
+    const m = own.match(/^([^:：]{2,40})[:：]\s*\S/);  // the picked text itself is "label: value"
+    if (m && isLabel(m[1])) { label = lab(m[1]); labelMode = 'self'; }
+    if (!label && prev && isLabel(prev.textContent) && !pair(prev.textContent) && labelish(prev) && norm(prev.textContent) !== own) {
+      label = lab(prev.textContent); labelMode = 'next'; }
+    for (let a = el.parentElement, i = 0; !label && a && i < 3 && a !== document.body; a = a.parentElement, i++) {
+      if (norm(a.textContent).length > 200) break;
+      const first = [...a.querySelectorAll('*')].find(x => !x.contains(el) && !el.contains(x) && !x.children.length && norm(x.textContent));
+      if (first && (first.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING) && isLabel(first.textContent) && !pair(first.textContent) && labelish(first)) {
+        label = lab(first.textContent); labelMode = 'row'; }
+    }
+  }
+  return {selector, selectors, count: document.querySelectorAll(selector).length, samples: [value(el)], list_hint: listHint,
+          label, label_mode: labelMode};
 }
 """
 
@@ -294,7 +318,30 @@ DETAIL_JS = r"""
     return (c.textContent || '').replace(/\s+/g, ' ').trim(); };
   /*__GEO__*/
   const o = {};
+  const __norm = t => (t || '').replace(/\s+/g, ' ').trim();
+  const __lab = t => __norm(t).replace(/[:：\s]+$/, '');
+  // the value next to a label ("کد کالا" → "831290"), wherever that row sits on this page
+  const byLabel = f => {
+    const want = f.label, cut = t => { t = __norm(t); const i = t.indexOf(want);
+      return i < 0 ? t : t.slice(i + want.length).replace(/^[\s:：\-–|]+/, '').trim(); };
+    for (const x of document.querySelectorAll('body *')) {
+      if (x.children.length > 3) continue;
+      const t = __lab(x.textContent);
+      if (f.label_mode === 'self') {
+        if (t.startsWith(want) && /^[:：]/.test(__norm(x.textContent).slice(want.length).trim()) && x.children.length <= 1) {
+          const v = cut(__txt(x)); if (v) return v; }
+        continue;
+      }
+      if (t !== want) continue;
+      if (f.label_mode === 'next' && x.nextElementSibling) { const v = __txt(x.nextElementSibling); if (v) return v; }
+      for (let a = x.parentElement, i = 0; a && i < 3 && a !== document.body; a = a.parentElement, i++) {
+        const v = cut(__txt(a)); if (v) return v; }
+    }
+    return null; };
   for (const f of fields) { let e = null;
+    // a labelled field is read by its label only: when this page has no such row the field is empty (by position
+    // it would pick whatever row sits there, e.g. the weight instead of a missing category)
+    if (f.label && (f.attr || 'text') === 'text') { o[f.name] = byLabel(f); continue; }
     for (const sel of (f.selectors && f.selectors.length ? f.selectors : [f.selector])) { try { e = document.querySelector(sel); } catch (_) {} if (e) break; }
     if (f.attr === 'geo') { o[f.name] = __geo(e); continue; }
     o[f.name] = !e ? null : f.attr === 'href' ? (e.closest('a')?.href || null) : f.attr === 'src' ? (e.currentSrc || e.src || null)
@@ -680,7 +727,7 @@ def run_profiles(cat: dict, site: dict, progress, log) -> dict:
             except Exception:
                 pass
             clicked = _click_show(page, cfg)
-            row = _read_settled(page, fields, 8000 if clicked else 0)
+            row = _read_settled(page, fields, 8000) if clicked else _read_settled(page, fields, 3000, only_if_missing=True)
             log({"url": href, "found": len(row), "clicked": clicked})
             stats["details"] += 1
             for f in fields:
@@ -762,11 +809,11 @@ def _click_show(page, cfg: dict) -> bool:
     return clicked
 
 
-def _read_settled(page, fields: list, wait_ms: int) -> dict:
+def _read_settled(page, fields: list, wait_ms: int, only_if_missing: bool = False) -> dict:
     """Read the fields; after a click, keep reading until nothing new appears (the number loads late)."""
     read = lambda: {k: v for k, v in page.evaluate(DETAIL_JS, fields).items() if v not in (None, "")}
     row = read()
-    if not wait_ms:
+    if not wait_ms or (only_if_missing and len(row) == len(fields)):
         return row
     page.wait_for_timeout(1000)
     waited, last, same = 1000, None, 0
