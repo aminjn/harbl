@@ -200,13 +200,23 @@ PICK_JS = r"""
     const own = norm(el.textContent), prev = el.previousElementSibling;
     const m = own.match(/^([^:：]{2,40})[:：]\s*\S/);  // the picked text itself is "label: value"
     if (m && isLabel(m[1])) { label = lab(m[1]); labelMode = 'self'; labelEl = el; }
+    // "label:" written right before the value — a separate element, plain text, after an icon, or one of several
+    // pairs on one line («کد کالا: ۸۳۱۲۹۰  انقضا: ۱۴۰۵/۱۰/۰۸»): the nearest "…:" before the value is its label
+    for (let a = el.parentElement, i = 0; !label && a && i < 3 && a !== document.body; a = a.parentElement, i++) {
+      if (norm(a.textContent).length > 300) break;
+      const r = document.createRange(); r.setStart(a, 0); r.setEndBefore(el);
+      const mm = norm(r.toString()).match(/(?:^|[\s|•·،,])([^:：|•·،,\d۰-۹٠-٩]{2,40}?)\s*[:：]\s*$/);
+      if (mm && isLabel(mm[1])) { label = lab(mm[1]); labelMode = 'inline'; labelEl = a; }
+    }
     if (!label && prev && isLabel(prev.textContent) && !pair(prev.textContent) && norm(prev.textContent) !== own
         && (labelish(prev) || small(el.parentElement))) {
       label = lab(prev.textContent); labelMode = 'next'; labelEl = prev; weak = !labelish(prev); }
     for (let a = el.parentElement, i = 0; !label && a && i < 3 && a !== document.body; a = a.parentElement, i++) {
       if (norm(a.textContent).length > 200) break;
-      const first = [...a.querySelectorAll('*')].find(x => !x.contains(el) && !el.contains(x) && !x.children.length && norm(x.textContent));
-      if (first && (first.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING) && isLabel(first.textContent) && !pair(first.textContent)
+      // the nearest text before the value in this row (with several pairs in a row, its own title, not the first one)
+      const first = [...a.querySelectorAll('*')].filter(x => !x.contains(el) && !el.contains(x) && !x.children.length && norm(x.textContent)
+                                                        && (x.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING)).pop();
+      if (first && isLabel(first.textContent) && !pair(first.textContent)
           && (labelish(first) || small(a))) {
         label = lab(first.textContent); labelMode = 'row'; labelEl = first; weak = !labelish(first); }
     }
@@ -340,9 +350,33 @@ DETAIL_JS = r"""
   const __norm = t => (t || '').replace(/\s+/g, ' ').trim();
   const __lab = t => __norm(t).replace(/[:：\s]+$/, '');
   // the value next to a label ("کد کالا" → "831290"), wherever that row sits on this page
+  // text with a space at every tag boundary (<span>کد کالا:</span><span>۸۳۱۲۹۰</span><span>انقضا:</span> has none)
+  const __sp = x => { let out = ''; const w = n => { if (n.nodeType === 3) out += n.textContent;
+    else if (n.nodeType === 1 && !/^(SCRIPT|STYLE|NOSCRIPT)$/.test(n.tagName)) { out += ' '; n.childNodes.forEach(w); out += ' '; } };
+    w(x); return __norm(out); };
+  const __esc = t => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  // the text after a label, up to the next "something:" label on the same line
+  const __untilNext = t => t.replace(/\s+[^\s:：\d۰-۹٠-٩|]{2,20}(?:\s[^\s:：\d۰-۹٠-٩|]{1,20}){0,2}\s*[:：].*$/, '').trim();
   const byLabel = f => {
     const want = f.label, cut = t => { t = __norm(t); const i = t.indexOf(want);
-      return i < 0 ? t : t.slice(i + want.length).replace(/^[\s:：\-–|]+/, '').trim(); };
+      return __untilNext(i < 0 ? t : t.slice(i + want.length).replace(/^[\s:：\-–|]+/, '').trim()); };
+    if (f.label_mode === 'inline') {
+      // the smallest block whose text has "label:" — the value is what follows it
+      const re = new RegExp('(?:^|[\\s|•·،,])' + __esc(want) + '\\s*[:：]\\s*(.+)$');
+      let best = null, bestLen = 1e9;
+      for (const pass of [f.label_seg, null]) {
+        let els = []; try { els = document.querySelectorAll(pass || 'body *'); } catch (_) {}
+        for (const x of els) {
+          if ((x.textContent || '').length > 600) continue;
+          const t = __sp(x);
+          if (t.length > 300 || t.length >= bestLen) continue;
+          const m = t.match(re); if (!m) continue;
+          const v = __untilNext(m[1]); if (v) { best = v; bestLen = t.length; }
+        }
+        if (best) return best;
+      }
+      return null;
+    }
     for (const x of document.querySelectorAll('body *')) {
       if (x.children.length > 3) continue;
       if (f.label_seg) { try { if (!x.matches(f.label_seg)) continue; } catch (_) {} }
