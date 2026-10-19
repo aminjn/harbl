@@ -495,7 +495,7 @@ def save_visual(cid: int, body: VisualIn):
         url = "\n".join(lines)
         fields = [{k: f.get(k) for k in ("name", "page", "attr", "rel", "rel_tags", "selector", "count", "sample", "raw",
                                          "after", "before", "remove", "replace", "digits", "at", "rels", "selectors",
-                                         "label", "label_mode")}
+                                         "label", "label_mode", "label_seg", "label_weak")}
                   for f in body.fields if str(f.get("name") or "").strip()]
         cfg = {"list_url": url, "max_pages": body.max_pages, "item_selector": body.item_selector, "fields": fields,
                "detail_link": body.detail_link or None, "detail_click": body.detail_click or None,

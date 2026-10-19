@@ -144,12 +144,24 @@ PICK_JS = r"""
     if (el.getAttribute(a)) cands.push(`${el.tagName.toLowerCase()}[${a}="${CSS.escape(el.getAttribute(a))}"]`);
   cands.push(seg(el));
   if (el.parentElement) cands.push(seg(el.parentElement) + ' > ' + seg(el));
-  // nearest ancestor with an id or a distinctive class, then the element's own kind inside it
-  for (let a = el.parentElement; a && a !== document.body; a = a.parentElement) {
-    if (a.id && !/\d{3,}/.test(a.id)) { cands.push('#' + esc(a.id) + ' ' + seg(el)); break; }
-    const cls = [...a.classList].filter(okClass);
-    if (cls.length && document.querySelectorAll(a.tagName.toLowerCase() + '.' + cls.map(esc).join('.')).length === 1) {
-      cands.push(seg(a) + ' ' + seg(el)); break; }
+  // nearest ancestor with an id or a distinctive class: the element's own kind inside it, and else its position
+  // counted from that container (rows added or missing elsewhere on another page do not move it)
+  const relPath = (from, e) => { const p = [];
+    for (; e && e !== from; e = e.parentElement) {
+      let s = seg(e); const sib = [...e.parentElement.children].filter(c => c.matches(s));
+      if (sib.length > 1) s += `:nth-of-type(${[...e.parentElement.children].filter(c => c.tagName === e.tagName).indexOf(e) + 1})`;
+      p.unshift(s); }
+    return p.join(' > '); };
+  let anchors = 0;
+  for (let a = el.parentElement; a && a !== document.body && anchors < 2; a = a.parentElement) {
+    let aSel = null;
+    if (a.id && !/\d{3,}/.test(a.id)) aSel = '#' + esc(a.id);
+    else { const cls = [...a.classList].filter(okClass);
+      if (cls.length && document.querySelectorAll(a.tagName.toLowerCase() + '.' + cls.map(esc).join('.')).length === 1) aSel = seg(a); }
+    if (!aSel) continue;
+    if (!anchors) cands.push(aSel + ' ' + seg(el));
+    cands.push(aSel + ' > ' + relPath(a, el));
+    anchors++;
   }
   const selectors = [...new Set(cands)].filter(unique);
   selectors.push(positional);
@@ -174,7 +186,12 @@ PICK_JS = r"""
   const norm = t => (t || '').replace(/\s+/g, ' ').trim();
   const lab = t => norm(t).replace(/[:：\s]+$/, '');
   const isLabel = t => { t = lab(t); return t.length >= 2 && t.length <= 40 && !/\d{3,}/.test(t); };
-  let label = null, labelMode = null;
+  let label = null, labelMode = null, labelEl = null, weak = false;
+  // a small "title above value" box that is one of a group of alike boxes (brand / category / status boxes,
+  // spec rows) — a lone block like a doctor's city above the name is not a title/value pair
+  const small = a => a && a.parentElement && norm(a.textContent).length <= 80 && a.querySelectorAll('*').length <= 8
+    && [...a.parentElement.children].some(c => c !== a && c.tagName === a.tagName && c.className === a.className
+                                               && c.children.length === a.children.length);
   // a "label: value" text is a whole row, never a label of something else
   const pair = t => /[:：]\s*\S/.test(norm(t));
   // looks like a label: "…:" or a header/bold title, or a cell of a table row / list item / definition list
@@ -182,18 +199,20 @@ PICK_JS = r"""
   if (attr === 'text') {
     const own = norm(el.textContent), prev = el.previousElementSibling;
     const m = own.match(/^([^:：]{2,40})[:：]\s*\S/);  // the picked text itself is "label: value"
-    if (m && isLabel(m[1])) { label = lab(m[1]); labelMode = 'self'; }
-    if (!label && prev && isLabel(prev.textContent) && !pair(prev.textContent) && labelish(prev) && norm(prev.textContent) !== own) {
-      label = lab(prev.textContent); labelMode = 'next'; }
+    if (m && isLabel(m[1])) { label = lab(m[1]); labelMode = 'self'; labelEl = el; }
+    if (!label && prev && isLabel(prev.textContent) && !pair(prev.textContent) && norm(prev.textContent) !== own
+        && (labelish(prev) || small(el.parentElement))) {
+      label = lab(prev.textContent); labelMode = 'next'; labelEl = prev; weak = !labelish(prev); }
     for (let a = el.parentElement, i = 0; !label && a && i < 3 && a !== document.body; a = a.parentElement, i++) {
       if (norm(a.textContent).length > 200) break;
       const first = [...a.querySelectorAll('*')].find(x => !x.contains(el) && !el.contains(x) && !x.children.length && norm(x.textContent));
-      if (first && (first.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING) && isLabel(first.textContent) && !pair(first.textContent) && labelish(first)) {
-        label = lab(first.textContent); labelMode = 'row'; }
+      if (first && (first.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING) && isLabel(first.textContent) && !pair(first.textContent)
+          && (labelish(first) || small(a))) {
+        label = lab(first.textContent); labelMode = 'row'; labelEl = first; weak = !labelish(first); }
     }
   }
   return {selector, selectors, count: document.querySelectorAll(selector).length, samples: [value(el)], list_hint: listHint,
-          label, label_mode: labelMode};
+          label, label_mode: labelMode, label_seg: labelEl ? seg(labelEl) : null, label_weak: weak};
 }
 """
 
@@ -326,6 +345,7 @@ DETAIL_JS = r"""
       return i < 0 ? t : t.slice(i + want.length).replace(/^[\s:：\-–|]+/, '').trim(); };
     for (const x of document.querySelectorAll('body *')) {
       if (x.children.length > 3) continue;
+      if (f.label_seg) { try { if (!x.matches(f.label_seg)) continue; } catch (_) {} }
       const t = __lab(x.textContent);
       if (f.label_mode === 'self') {
         if (t.startsWith(want) && /^[:：]/.test(__norm(x.textContent).slice(want.length).trim()) && x.children.length <= 1) {
@@ -339,13 +359,10 @@ DETAIL_JS = r"""
     }
     return null; };
   for (const f of fields) { let e = null;
-    // a labelled field is read by its label only: when this page has no such row the field is empty (by position
-    // it would pick whatever row sits there, e.g. the weight instead of a missing category)
-    let sels = f.selectors && f.selectors.length ? f.selectors : [f.selector];
-    if (f.label && (f.attr || 'text') === 'text') {
-      const v = byLabel(f); if (v) { o[f.name] = v; continue; }
-      sels = sels.length > 1 ? sels.slice(0, -1) : [];  // not the positional path (it finds another row's value)
-    }
+    // a labelled field is read by its label only: when this page has no such label the field is empty (by
+    // position it would pick whatever row sits there, e.g. the status box instead of a missing category box)
+    const sels = f.selectors && f.selectors.length ? f.selectors : [f.selector];
+    if (f.label && (f.attr || 'text') === 'text') { o[f.name] = byLabel(f); continue; }
     for (const sel of sels) { try { e = document.querySelector(sel); } catch (_) {} if (e) break; }
     if (f.attr === 'geo') { o[f.name] = __geo(e); continue; }
     o[f.name] = !e ? null : f.attr === 'href' ? (e.closest('a')?.href || null) : f.attr === 'src' ? (e.currentSrc || e.src || null)

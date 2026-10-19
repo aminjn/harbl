@@ -449,7 +449,7 @@ async function vPick(x,y,up=0){const k=vArm;vArm=null;
       if(k==='cnew')vcfg.clicks.push(b);else vcfg.clicks[+k.slice(1)]=b;
       toast(`دکمه «${b.text||'—'}» انتخاب شد؛ حالا خودتان یک بار رویش کلیک کنید تا اطلاعات نمایش داده شود`)}
     else{const f=vcfg.fields[+k.slice(1)];vLast={k,x,y,up};
-      Object.assign(f,{page:'detail',selector:r.selector,selectors:r.selectors,raw:r.samples[0]||'',label:r.label||null,label_mode:r.label_mode||null,at:(()=>{try{return new URL($('#rec-url').value).pathname}catch{return ''}})()});
+      Object.assign(f,{page:'detail',selector:r.selector,selectors:r.selectors,raw:r.samples[0]||'',label:r.label||null,label_mode:r.label_mode||null,label_seg:r.label_seg||null,label_weak:!!r.label_weak,at:(()=>{try{return new URL($('#rec-url').value).pathname}catch{return ''}})()});
       ['rel','rel_tags','rels','count'].forEach(x=>delete f[x]);
       toast(`انتخاب شد: ${(r.samples[0]||'—').slice(0,50)}`)}
     vBar();vRender();vSave(true)}
