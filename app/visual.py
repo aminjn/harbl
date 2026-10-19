@@ -341,8 +341,12 @@ DETAIL_JS = r"""
   for (const f of fields) { let e = null;
     // a labelled field is read by its label only: when this page has no such row the field is empty (by position
     // it would pick whatever row sits there, e.g. the weight instead of a missing category)
-    if (f.label && (f.attr || 'text') === 'text') { o[f.name] = byLabel(f); continue; }
-    for (const sel of (f.selectors && f.selectors.length ? f.selectors : [f.selector])) { try { e = document.querySelector(sel); } catch (_) {} if (e) break; }
+    let sels = f.selectors && f.selectors.length ? f.selectors : [f.selector];
+    if (f.label && (f.attr || 'text') === 'text') {
+      const v = byLabel(f); if (v) { o[f.name] = v; continue; }
+      sels = sels.length > 1 ? sels.slice(0, -1) : [];  // not the positional path (it finds another row's value)
+    }
+    for (const sel of sels) { try { e = document.querySelector(sel); } catch (_) {} if (e) break; }
     if (f.attr === 'geo') { o[f.name] = __geo(e); continue; }
     o[f.name] = !e ? null : f.attr === 'href' ? (e.closest('a')?.href || null) : f.attr === 'src' ? (e.currentSrc || e.src || null)
               : __txt(e);

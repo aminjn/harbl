@@ -414,9 +414,12 @@ function vBar(){const bar=$('#rec-pick');if(!vcfg||cat?.mode!=='visual'){bar.inn
 let vTestOut='';
 async function vTest(){const fields=vPayload().fields.filter(vPicked);
   if(!fields.length){toast('هنوز هیچ اطلاعاتی روی صفحه پروفایل انتخاب نشده');return}
-  try{const r=await jpost('/api/recorder/read',{fields});
-    vTestOut='<b>نتیجه روی همین صفحه:</b> '+fields.map(f=>{const v=vClean(r[f.name]??'',f);
-      return `${esc(f.name)}: ${v?`<span class="ok">${esc(String(v).slice(0,60))}</span>`:'<span class="failed">خالی ✗ (دوباره انتخاب کنید)</span>'}`}).join(' · ')}
+  vTestOut='در حال آزمایش مثل جمع‌آوری (همین صفحه از نو باز می‌شود)…';vBar();
+  try{const r=await jpost('/api/recorder/read',{fields,fresh:true,clicks:vcfg.clicks||[]});
+    const empty=fields.filter(f=>!vClean(r[f.name]??'',f));
+    vTestOut='<b>نتیجه مثل جمع‌آوری</b> (صفحه از نو باز شد؛ کلیک‌های دستی شما حساب نیست، فقط «دکمه نمایش»ها زده شد): '+fields.map(f=>{const v=vClean(r[f.name]??'',f);
+      return `${esc(f.name)}: ${v?`<span class="ok">${esc(String(v).slice(0,60))}</span>`:'<span class="failed">خالی ✗</span>'}`}).join(' · ')
+      +(empty.length?`<br><small class="failed">اگر «${empty.map(f=>esc(f.name)).join('، ')}» روی صفحه هست ولی اینجا خالی آمد: یا پشت یک زبانه/دکمه است (مثل «مشخصات» یا «اطلاعات بیشتر») — «+ دکمه نمایش» را بزنید و روی همان زبانه کلیک کنید؛ یا دوباره با ↺ انتخابش کنید.</small>`:'')}
   catch(err){vTestOut=esc(err.message)}
   vBar()}
 function vArmSet(k){vArm=vArm===k?null:k;vHlHide();vBar()}

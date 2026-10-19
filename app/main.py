@@ -642,12 +642,16 @@ async def recorder_links(body: RecLinks):
 
 class RecRead(BaseModel):
     fields: list
+    fresh: bool = False   # test like a run: the page reopened, nothing clicked by hand, then the show buttons
+    clicks: list = []
 
 
 @app.post("/api/recorder/read", dependencies=[Depends(auth)])
 async def recorder_read(body: RecRead):
     """What each picked field reads on the page open in the browser (the panel's test button)."""
     try:
+        if body.fresh:
+            return await recorder.read_fresh(body.fields, body.clicks)
         return await recorder.read(body.fields)
     except RecorderError as e:
         raise HTTPException(409, str(e))

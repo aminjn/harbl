@@ -145,6 +145,56 @@ class Recorder:
         """The picked fields as a collection run would read them on the open page."""
         return await self._page().evaluate(visual.DETAIL_JS, fields)
 
+    async def read_fresh(self, fields: list, clicks: list) -> dict:
+        """The panel's test, done the way a run does it: the open page's address in a new tab of the same browser
+        (same login), nothing clicked by the owner, then the "show" buttons, then read (waiting a little for
+        late fields). What the owner clicked by hand (a «مشخصات» tab…) does not count, as in a run."""
+        page = self._page()
+        url = page.url
+        p = await self.context.new_page()
+        self.page = page  # the new tab is not the one shown
+        try:
+            await p.goto(url, wait_until="domcontentloaded", timeout=45000)
+            await p.wait_for_timeout(1500)
+            try:
+                if await p.evaluate(visual.EXPAND_JS):
+                    await p.wait_for_timeout(700)
+            except Exception:
+                pass
+            clicked = False
+            for i, b in enumerate(clicks):
+                for _ in range(8 if i and clicked else 1):  # a later button may appear after the one before
+                    n = 0
+                    if b.get("text"):
+                        try:
+                            n = await p.evaluate(visual.CLICK_TEXT_JS, b["text"])
+                        except Exception:
+                            n = 0
+                    for sel in [] if n else [x for x in b.get("selectors") or [] if x]:
+                        try:
+                            loc = p.locator(sel).first
+                            if await loc.count() and await loc.is_visible():
+                                await loc.click(timeout=5000)
+                                n = 1
+                                break
+                        except Exception:
+                            continue
+                    if n:
+                        clicked = True
+                        await p.wait_for_timeout(700)
+                        break
+                    await p.wait_for_timeout(500)
+            row = {}
+            for _ in range(16 if clicked else 6):
+                row = await p.evaluate(visual.DETAIL_JS, fields)
+                if all(v not in (None, "") for v in row.values()):
+                    break
+                await p.wait_for_timeout(500)
+            return row
+        finally:
+            self.page = page
+            await p.close()
+
     async def hover(self, x: float, y: float, mode: str, where: str, item_selector: str | None, attr: str) -> dict | None:
         """What a click at (x, y) would pick, for the live outline in the panel (see visual.HOVER_JS)."""
         if not self.active:
