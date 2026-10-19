@@ -1,7 +1,6 @@
 """SQLite storage for sites, HAR-derived requests and runs."""
 import json
 import sqlite3
-import threading
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -9,7 +8,6 @@ from pathlib import Path
 from .config import DATA_DIR
 
 DB_PATH = DATA_DIR / "scraper.db"
-_lock = threading.Lock()
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS sites (
@@ -74,16 +72,17 @@ def now() -> str:
 
 @contextmanager
 def conn():
-    with _lock:
-        # the panel and a collection process share the file: wait for the other's write instead of failing
-        c = sqlite3.connect(DB_PATH, timeout=30)
-        c.row_factory = sqlite3.Row
-        c.execute("PRAGMA foreign_keys = ON")
-        try:
-            yield c
-            c.commit()
-        finally:
-            c.close()
+    """A connection of its own per use. No process-wide lock: SQLite (WAL) lets readers go on while one process
+    writes, and a writer waits for another's write (timeout). A shared lock made one slow request (e.g. waiting
+    for a collection process's write) block every other request, until the whole panel stopped answering."""
+    c = sqlite3.connect(DB_PATH, timeout=30)
+    c.row_factory = sqlite3.Row
+    c.execute("PRAGMA foreign_keys = ON")
+    try:
+        yield c
+        c.commit()
+    finally:
+        c.close()
 
 
 def init():

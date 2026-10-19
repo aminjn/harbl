@@ -30,6 +30,7 @@ scheduler = BackgroundScheduler(timezone="UTC")
 _running: dict[int, int] = {}  # section id -> site id
 _queue: list[tuple[int, int, str]] = []  # (site id, section id, trigger) waiting for a free slot
 _running_lock = threading.Lock()
+_tags: dict[int, str] = {}  # section id -> the HARSCRAPER_RUN_TAG of its running process
 MAX_PARALLEL = int(os.environ.get("HARSCRAPER_PARALLEL") or 3)
 MEM_SHARE = 0.6  # all runs together (browsers included) may use at most this share of the server's RAM
 
@@ -99,6 +100,7 @@ def _job(site_id: int, trigger: str, category_id: int):
             if shutil.which("nice"):
                 cmd = ["nice", "-n", "10"] + cmd
             tag = secrets.token_hex(8)
+            _tags[category_id] = tag
             proc = subprocess.Popen(cmd, cwd=Path(__file__).resolve().parent.parent, start_new_session=True,
                                     env={**os.environ, "HARSCRAPER_RUN_TAG": tag})
             too_big = False
@@ -124,8 +126,27 @@ def _job(site_id: int, trigger: str, category_id: int):
     finally:
         with _running_lock:
             _running.pop(category_id, None)
+            _tags.pop(category_id, None)
         visual.clear_stop(site_id, category_id)
         _start_waiting()
+
+
+def _resource_log():
+    """Every minute while runs are going: free RAM, load and each run's memory, into the journal
+    (journalctl -u har-scraper | grep منابع), so a slow or stuck server can be explained afterwards."""
+    while True:
+        time.sleep(60)
+        if not _running:
+            continue
+        try:
+            info = {l.split(":")[0]: int(l.split()[1]) // 1024 for l in open("/proc/meminfo") if l.split(":")[0] in ("MemTotal", "MemAvailable", "SwapTotal", "SwapFree")}
+            load = open("/proc/loadavg").read().split()[0]
+            runs = "، ".join(f"بخش {cid}: {sum(m for _, m in _run_procs(tag)) // 2**20}MB" for cid, tag in list(_tags.items()))
+            print(f"[منابع] رم آزاد {info.get('MemAvailable')}MB از {info.get('MemTotal')}MB · "
+                  f"swap مصرف {info.get('SwapTotal', 0) - info.get('SwapFree', 0)}MB · بار پردازنده {load} · "
+                  f"اجراها: {runs or '—'} · صف: {len(_queue)}", flush=True)
+        except Exception as e:  # never let the logger die
+            print(f"[منابع] خطا: {e}", flush=True)
 
 
 def _start_waiting():
@@ -213,6 +234,7 @@ async def lifespan(app):
         for r in c.execute("SELECT * FROM sites"):
             sync_schedule(db.row(r))
     _resume_cut_runs()
+    threading.Thread(target=_resource_log, daemon=True).start()
     yield
     await recorder.stop(save=False)
     scheduler.shutdown(wait=False)
@@ -220,6 +242,14 @@ async def lifespan(app):
 
 app = FastAPI(title="HAR Scraper", lifespan=lifespan)
 security = HTTPBasic()
+
+
+@app.get("/healthz")
+def healthz():
+    """For the watchdog (deploy/install-watchdog.sh): answers only if request threads and the database are free."""
+    with db.conn() as c:
+        c.execute("SELECT 1")
+    return {"ok": True, "running": len(_running), "waiting": len(_queue)}
 
 
 @app.middleware("http")

@@ -120,6 +120,7 @@ fi
 
 echo "==> مرورگر ضبط (اختیاری)"
 bash "$SRC_DIR/deploy/install-recorder.sh" || echo "    نصب مرورگر ضبط ناموفق بود؛ بعداً: sudo bash deploy/install-recorder.sh"
+bash "$SRC_DIR/deploy/install-watchdog.sh" || echo "    نصب نگهبان ناموفق بود؛ بعداً: sudo bash deploy/install-watchdog.sh"
 
 sleep 2
 if curl -s -o /dev/null -w "%{http_code}" -u "$ADMIN_USER:$ADMIN_PASS" http://127.0.0.1/ | grep -q 200; then
